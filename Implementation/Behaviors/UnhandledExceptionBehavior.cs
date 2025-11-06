@@ -2,52 +2,45 @@
 using Hecole.Mediator.Interfaces.Behaviors;
 using Microsoft.Extensions.Logging;
 
-namespace Hecole.Mediator.Implementation.Behaviors
+namespace Hecole.Mediator.Implementation.Behaviors;
+
+/// <summary>
+/// Captures unhandled exceptions during the execution of a request in the pipeline.
+/// Similar to the UnhandledExceptionBehavior of MediatR.
+/// </summary>
+/// <typeparam name="TRequest">Type of the request.</typeparam>
+/// <typeparam name="TResponse">Type of the expected response.</typeparam>
+public sealed class UnhandledExceptionBehavior<TRequest, TResponse>(ILogger<UnhandledExceptionBehavior<TRequest, TResponse>> logger)
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
 {
-    /// <summary>
-    /// Captura exceções não tratadas durante a execução de um request no pipeline.
-    /// Similar ao UnhandledExceptionBehavior do MediatR.
-    /// </summary>
-    /// <typeparam name="TRequest">Tipo da requisição.</typeparam>
-    /// <typeparam name="TResponse">Tipo da resposta esperada.</typeparam>
-    public sealed class UnhandledExceptionBehavior<TRequest, TResponse>
-        : IPipelineBehavior<TRequest, TResponse>
-        where TRequest : IRequest<TResponse>
+    private readonly ILogger<UnhandledExceptionBehavior<TRequest, TResponse>> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+    public async Task<TResponse> Handle(
+        TRequest request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken cancellationToken)
     {
-        private readonly ILogger<UnhandledExceptionBehavior<TRequest, TResponse>> _logger;
-
-        public UnhandledExceptionBehavior(ILogger<UnhandledExceptionBehavior<TRequest, TResponse>> logger)
+        try
         {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            // Executes the next behavior or handler
+            return await next().ConfigureAwait(false);
         }
-
-        public async Task<TResponse> Handle(
-            TRequest request,
-            RequestHandlerDelegate<TResponse> next,
-            CancellationToken cancellationToken)
+        catch (OperationCanceledException)
         {
-            try
-            {
-                // Executa o próximo comportamento ou handler
-                return await next().ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Cancela silenciosamente (não é uma falha real)
-                _logger.LogWarning("A operação foi cancelada para o request {RequestName}.", typeof(TRequest).Name);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // Log estruturado e detalhado
-                _logger.LogError(ex,
-                    "Erro não tratado ao processar request {RequestName} com payload: {@Request}",
-                    typeof(TRequest).Name,
-                    request);
-
-                // Repropaga a exceção para o middleware de exceção da API
-                throw;
-            }
+            // Cancels silently (not a real failure)
+            _logger.LogWarning("The operation was canceled for the request {RequestName}.", typeof(TRequest).Name);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Structured and detailed log
+            _logger.LogError(ex,
+                "Unhandled error while processing request {RequestName} with payload: {@Request}",
+                typeof(TRequest).Name,
+                request);
+            // Repropagates the exception to the API exception middleware
+            throw;
         }
     }
 }

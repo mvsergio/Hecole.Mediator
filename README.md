@@ -162,7 +162,7 @@ Siga estes passos:
 
 ```bash
 # Fork o repositório
-git clone https://github.com/seu-usuario/hecole-mediator.git
+git clone https://github.com/mvsergio/hecole-mediator.git
 
 # Crie uma branch
 git checkout -b feature/nova-feature
