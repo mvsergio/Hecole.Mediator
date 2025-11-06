@@ -46,7 +46,7 @@ Ideal para sistemas como **gerenciamento escolar** (ex.: o projeto _Hecole_), on
 Clone o repositório:
 
 ```bash
-git clone https://github.com/seu-usuario/hecole-mediator.git
+git clone https://github.com/mvsergio/hecole-mediator.git
 ```
 
 Adicione como referência ao seu projeto (`.csproj`):
