@@ -3,7 +3,7 @@
 Uma implementação **leve**, **performática** e **sem dependências externas** do padrão **Mediator** para **.NET 8**, inspirada no **MediatR**.  
 Projetada para projetos **modulares** baseados em **Clean Architecture**, com suporte a **CQRS** (Commands, Queries, Requests e Notifications), **pipelines de behaviors** (ex.: validação, logging, performance monitoring e tratamento de exceções) e **integração nativa** com o **Dependency Injection (DI)** de `Microsoft.Extensions`.
 
-Ideal para sistemas como **gerenciamento escolar** (ex.: o projeto _Hecole_), onde módulos independentes (_Cadastro_, _Pedagógico_, _Tesouraria_) precisam de **orquestração de use cases com baixa acoplagem**.
+Ideal para sistemas com módulos independentes, que precisam de **orquestração de use cases com baixa acoplagem**.
 
 ---
 
