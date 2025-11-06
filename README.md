@@ -57,7 +57,7 @@ Adicione como referência ao seu projeto (`.csproj`):
 </ItemGroup>
 ```
 
-Ou (futuramente, via NuGet):
+Ou via NuGet (https://www.nuget.org/packages/Hecole.Mediator):
 
 ```bash
 dotnet add package Hecole.Mediator
