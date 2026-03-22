@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Hecole.Mediator</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Authors>Hecole</Authors>
     <Description>
       A lightweight, performant, and zero-external-dependencies implementation of the Mediator pattern for .NET 8, inspired by MediatR.
@@ -26,5 +26,7 @@
   </ItemGroup>
   <PropertyGroup>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/mvsergio/Hecole.Mediator</PackageProjectUrl>
+    <PackageTags>Mediator</PackageTags>
   </PropertyGroup>
 </Project>
