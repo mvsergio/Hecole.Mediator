@@ -1,4 +1,4 @@
-﻿using Hecole.Mediator.Interfaces;
+using Hecole.Mediator.Interfaces;
 using Hecole.Mediator.Interfaces.Behaviors;
 using System.Collections.Concurrent;
 using System.Reflection;
@@ -9,6 +9,7 @@ public sealed class CoreMediator(IServiceProvider serviceProvider) : ICoreMediat
 {
     private readonly IServiceProvider _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
     private static readonly ConcurrentDictionary<Type, MethodInfo> _handlerMethodCache = new();
+    private static readonly ConcurrentDictionary<Type, MethodInfo> _executePipelineCache = new();
 
     public async Task<TResponse> Send<TResponse>(
         IRequest<TResponse> request,
@@ -31,26 +32,37 @@ public sealed class CoreMediator(IServiceProvider serviceProvider) : ICoreMediat
             return m;
         });
 
-        // Loads registered behaviors
-        var behaviorType = typeof(IEnumerable<>).MakeGenericType(typeof(IPipelineBehavior<,>)
-            .MakeGenericType(requestType, typeof(TResponse)));
+        // Resolve behaviors for the CONCRETE request type
+        var behaviorInterfaceType = typeof(IPipelineBehavior<,>).MakeGenericType(requestType, typeof(TResponse));
+        var enumerableType = typeof(IEnumerable<>).MakeGenericType(behaviorInterfaceType);
+        var behaviors = _serviceProvider.GetService(enumerableType) as IEnumerable<object>;
+        var behaviorList = behaviors?.ToList() ?? [];
 
-        var behaviors = _serviceProvider.GetService(behaviorType) as IEnumerable<object>;
-        var castedBehaviors = behaviors?.CastDynamic<IPipelineBehavior<IRequest<TResponse>, TResponse>>()
-            ?? Enumerable.Empty<IPipelineBehavior<IRequest<TResponse>, TResponse>>();
+        // Build the handler delegate
+        RequestHandlerDelegate<TResponse> handlerDelegate = async () =>
+        {
+            var task = (Task<TResponse>?)method.Invoke(handler, new object[] { request, cancellationToken });
+            if (task is null)
+                throw new InvalidOperationException($"Failure invoking the Handle method in '{handlerType.FullName}'.");
+            return await task.ConfigureAwait(false);
+        };
 
-        // Executes pipeline + final handler
-        return await CorePipelineExecutor.ExecutePipeline(
-            request,
-            castedBehaviors,
-            async () =>
-            {
-                var task = (Task<TResponse>?)method.Invoke(handler, new object[] { request, cancellationToken });
-                if (task is null)
-                    throw new InvalidOperationException($"Failure invoking the Handle method in '{handlerType.FullName}'.");
-                return await task.ConfigureAwait(false);
-            },
-            cancellationToken);
+        // If no behaviors, execute handler directly
+        if (behaviorList.Count == 0)
+            return await handlerDelegate().ConfigureAwait(false);
+
+        // Use reflection to call the generic ExecutePipeline with the concrete request type
+        var executePipelineMethod = _executePipelineCache.GetOrAdd(requestType, rt =>
+        {
+            return typeof(CorePipelineExecutor)
+                .GetMethod(nameof(CorePipelineExecutor.ExecutePipeline), BindingFlags.Public | BindingFlags.Static)!
+                .MakeGenericMethod(rt, typeof(TResponse));
+        });
+
+        var resultTask = (Task<TResponse>?)executePipelineMethod.Invoke(null,
+            [request, behaviorList, handlerDelegate, cancellationToken]);
+
+        return await resultTask!.ConfigureAwait(false);
     }
 
     public async Task Publish<TNotification>(
@@ -89,17 +101,5 @@ public sealed class CoreMediator(IServiceProvider serviceProvider) : ICoreMediat
         }
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
-    }
-}
-
-internal static class EnumerableExtensions
-{
-    public static IEnumerable<TCast> CastDynamic<TCast>(this IEnumerable<object> source)
-    {
-        foreach (var item in source)
-        {
-            if (item is TCast casted)
-                yield return casted;
-        }
     }
 }
