@@ -1,14 +1,16 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Hecole.Mediator</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
+    <FileVersion>1.2.0.0</FileVersion>
     <Authors>Hecole</Authors>
     <Description>
-      A lightweight, performant, and zero-external-dependencies implementation of the Mediator pattern for .NET 8, inspired by MediatR.
+      A lightweight, performant implementation of the Mediator pattern for .NET 8+ and .NET 10, inspired by MediatR.
       Designed for modular projects based on Clean Architecture, with support for CQRS (Commands, Queries, Requests, and Notifications), behavior pipelines (e.g., validation, logging, performance monitoring, and unhandled exception handling), and native integration with Microsoft.Extensions Dependency Injection (DI).
       Ideal for systems with independent modules that require orchestration of use cases with low coupling.
     </Description>
@@ -16,6 +18,14 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hecole.Mediator.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="Hecole.Mediator.Tests\**" />
+    <EmbeddedResource Remove="Hecole.Mediator.Tests\**" />
+    <None Remove="Hecole.Mediator.Tests\**" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="FluentValidation" Version="12.1.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />

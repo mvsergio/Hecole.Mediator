@@ -5,6 +5,11 @@ using System.Reflection;
 
 namespace Hecole.Mediator.Implementation;
 
+/// <summary>
+/// Default implementation of <see cref="ICoreMediator"/>.
+/// Dispatches requests through the behavior pipeline and publishes notifications to all handlers in parallel.
+/// Uses reflection caching via <see cref="ConcurrentDictionary{TKey,TValue}"/> to avoid repeated reflection on the hot path.
+/// </summary>
 public sealed class CoreMediator(IServiceProvider serviceProvider) : ICoreMediator
 {
     private readonly IServiceProvider _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));

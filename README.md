@@ -1,7 +1,9 @@
 # 🧩 Hecole.Mediator
 
-Uma implementação **leve**, **performática** e **sem dependências externas** do padrão **Mediator** para **.NET 8**, inspirada no **MediatR**.  
-Projetada para projetos **modulares** baseados em **Clean Architecture**, com suporte a **CQRS** (Commands, Queries, Requests e Notifications), **pipelines de behaviors** (ex.: validação, logging, performance monitoring e tratamento de exceções) e **integração nativa** com o **Dependency Injection (DI)** de `Microsoft.Extensions`.
+![net8.0](https://img.shields.io/badge/.NET-8.0-blue) ![net10.0](https://img.shields.io/badge/.NET-10.0-blue) [![NuGet](https://img.shields.io/nuget/v/Hecole.Mediator)](https://www.nuget.org/packages/Hecole.Mediator)
+
+Uma implementação **leve** e **performática** do padrão **Mediator** para **.NET 8** e **.NET 10**, inspirada no **MediatR**.
+Projetada para projetos **modulares** baseados em **Clean Architecture**, com suporte a **CQRS** (Commands, Queries, Requests e Notifications), **pipelines de behaviors** (ex.: validação assíncrona, logging, performance monitoring e tratamento de exceções) e **integração nativa** com o **Dependency Injection (DI)** de `Microsoft.Extensions`.
 
 Ideal para sistemas com módulos independentes, que precisam de **orquestração de use cases com baixa acoplagem**.
 
@@ -34,7 +36,7 @@ Ideal para sistemas com módulos independentes, que precisam de **orquestração
 
 ## 🧰 Requisitos
 
-- .NET **8.0** ou superior.  
+- .NET **8.0** ou **.NET 10.0** ou superior.
 - Pacotes opcionais:
   - `FluentValidation` (para `ValidationBehavior`)
   - `Microsoft.Extensions.Logging` (para logging estruturado)
@@ -43,24 +45,16 @@ Ideal para sistemas com módulos independentes, que precisam de **orquestração
 
 ## 💾 Instalação
 
-Clone o repositório:
-
-```bash
-git clone https://github.com/mvsergio/hecole-mediator.git
-```
-
-Adicione como referência ao seu projeto (`.csproj`):
-
-```xml
-<ItemGroup>
-  <ProjectReference Include="..\Hecole.Mediator\Hecole.Mediator.csproj" />
-</ItemGroup>
-```
-
-Ou via NuGet (https://www.nuget.org/packages/Hecole.Mediator):
+Via NuGet (https://www.nuget.org/packages/Hecole.Mediator):
 
 ```bash
 dotnet add package Hecole.Mediator
+```
+
+Ou clone o repositório:
+
+```bash
+git clone https://github.com/mvsergio/Hecole.Mediator.git
 ```
 
 ---

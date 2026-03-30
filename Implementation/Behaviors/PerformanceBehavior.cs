@@ -5,6 +5,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Hecole.Mediator.Implementation.Behaviors;
 
+/// <summary>
+/// Pipeline behavior that logs a warning when a request takes longer than 500ms to process.
+/// </summary>
 public sealed class PerformanceBehavior<TRequest, TResponse>(ILogger<PerformanceBehavior<TRequest, TResponse>> logger) : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {

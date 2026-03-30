@@ -5,6 +5,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Hecole.Mediator.Implementation.Behaviors;
 
+/// <summary>
+/// Pipeline behavior that logs the start and completion of each request, including elapsed time.
+/// </summary>
 public sealed class LoggingBehavior<TRequest, TResponse>(ILogger<LoggingBehavior<TRequest, TResponse>> logger) : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {

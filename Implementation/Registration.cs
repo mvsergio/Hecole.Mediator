@@ -7,6 +7,12 @@ namespace Hecole.Mediator.Implementation;
 
 public static class ServiceCollectionExtensions
 {
+    /// <summary>
+    /// Registers <see cref="ICoreMediator"/> as Scoped and scans the specified assemblies
+    /// for <see cref="IRequestHandler{TRequest, TResponse}"/>, <see cref="INotificationHandler{TNotification}"/>
+    /// and <see cref="IPipelineBehavior{TRequest, TResponse}"/> implementations.
+    /// If no assemblies are specified, all loaded assemblies are scanned.
+    /// </summary>
     public static IServiceCollection AddHecoleMediator(this IServiceCollection services, params Assembly[] assembliesToScan)
     {
         var toScan = assembliesToScan == null || assembliesToScan.Length == 0
