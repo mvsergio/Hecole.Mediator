@@ -5,10 +5,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Hecole.Mediator</PackageId>
-    <Version>1.2.1</Version>
-    <AssemblyVersion>1.2.1.0</AssemblyVersion>
-    <FileVersion>1.2.1.0</FileVersion>
+    <Version>1.3.0</Version>
+    <AssemblyVersion>1.3.0.0</AssemblyVersion>
+    <FileVersion>1.3.0.0</FileVersion>
     <Authors>Hecole</Authors>
+    <PackageReleaseNotes>1.3.0 (2026-04-28) — Fix open-generic IPipelineBehavior registration in AddHecoleMediator. Open-generic behaviors (ex: ObservabilityBehavior&lt;TRequest, TResponse&gt;) were registered with parameterized types causing ArgumentException at BuildServiceProvider. Now correctly registered as (typeof(IPipelineBehavior&lt;,&gt;), implementationType) when type.IsGenericTypeDefinition. Tests added (AddHecoleMediatorTests). No breaking change — workaround manual via services.Remove + AddTransient open-generic can be removed.</PackageReleaseNotes>
     <Description>
       A lightweight, performant implementation of the Mediator pattern for .NET 8+ and .NET 10, inspired by MediatR.
       Designed for modular projects based on Clean Architecture, with support for CQRS (Commands, Queries, Requests, and Notifications), behavior pipelines (e.g., validation, logging, performance monitoring, and unhandled exception handling), and native integration with Microsoft.Extensions Dependency Injection (DI).

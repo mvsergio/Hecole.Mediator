@@ -5,6 +5,32 @@ Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/),
 e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
+## [1.3.0] - 2026-04-28
+
+### Fixed
+- **`AddHecoleMediator` open-generic `IPipelineBehavior<,>` registration** —
+  scan automático do assembly registrava behaviors open-generic
+  (ex: `ObservabilityBehavior<TRequest, TResponse>`) com tipos parametrizados
+  da classe ao invés de `GetGenericTypeDefinition()`. Resultado: MS DI lançava
+  `ArgumentException: "Cannot instantiate implementation type"` em
+  `BuildServiceProvider`/resolve. O fix detecta `IsGenericTypeDefinition` e
+  registra como `(typeof(IPipelineBehavior<,>), implementationType)` aberto.
+
+### Added
+- Tests dedicados em `AddHecoleMediatorTests`:
+  - `OpenGenericBehavior_RegistersAsDefinitionMapping_DoesNotThrowOnBuild`
+  - `OpenGenericBehavior_RegisteredAsDefinitionToDefinition`
+  - `OpenGenericBehavior_RegisteredViaScan_RunsInPipeline`
+  - `ClosedGenericHandlers_StillRegistered`
+  - `NotificationHandlers_StillRegistered`
+- Fake `OpenGenericTestBehavior<TRequest, TResponse>` em test fixtures
+
+### Migration
+Sem breaking change. Consumidores que usaram workaround manual
+`services.Remove(...) + AddTransient(typeof(IPipelineBehavior<,>), typeof(MyBehavior<,>))`
+após `AddHecoleMediator(...)` podem remover o hack — `AddHecoleMediator`
+agora registra corretamente.
+
 ## [1.2.0] - 2026-03-30
 
 ### Fixed

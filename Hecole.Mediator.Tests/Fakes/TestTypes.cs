@@ -88,6 +88,14 @@ public class ThrowingNotificationHandler : INotificationHandler<TestNotification
     }
 }
 
+// Open-generic behavior with DI-resolvable constructor (for AddHecoleMediator scan tests).
+public class OpenGenericTestBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
+        => next();
+}
+
 // Tracking Behavior (for pipeline ordering tests)
 public class TrackingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>

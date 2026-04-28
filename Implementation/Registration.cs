@@ -30,23 +30,41 @@ public static class ServiceCollectionExtensions
 
             foreach (var type in types.Where(t => t != null && t.IsClass && !t.IsAbstract))
             {
-                var handlerIfaces = type.GetInterfaces()
-                    .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequestHandler<,>));
-                foreach (var iface in handlerIfaces)
-                    services.AddTransient(iface, type);
-
-                var notificationIfaces = type.GetInterfaces()
-                    .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(INotificationHandler<>));
-                foreach (var iface in notificationIfaces)
-                    services.AddTransient(iface, type);
-
-                var pipelineIfaces = type.GetInterfaces()
-                    .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IPipelineBehavior<,>));
-                foreach (var iface in pipelineIfaces)
-                    services.AddTransient(iface, type);
+                RegisterByInterface(services, type, typeof(IRequestHandler<,>));
+                RegisterByInterface(services, type, typeof(INotificationHandler<>));
+                RegisterByInterface(services, type, typeof(IPipelineBehavior<,>));
             }
         }
 
         return services;
+    }
+
+    /// <summary>
+    /// Registers <paramref name="implementationType"/> for every closed/open generic interface it implements
+    /// matching <paramref name="openGenericServiceType"/> (e.g. <c>typeof(IPipelineBehavior&lt;,&gt;)</c>).
+    ///
+    /// <para>Open-generic implementations (e.g. <c>ObservabilityBehavior&lt;TRequest, TResponse&gt;</c>)
+    /// are registered as <c>(typeof(IPipelineBehavior&lt;,&gt;), typeof(ObservabilityBehavior&lt;,&gt;))</c>
+    /// so MS DI constructs the correct closed type per request. Closed-generic implementations are
+    /// registered with the parameterized interface they expose.</para>
+    /// </summary>
+    private static void RegisterByInterface(IServiceCollection services, Type implementationType, Type openGenericServiceType)
+    {
+        var matchingIfaces = implementationType.GetInterfaces()
+            .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == openGenericServiceType);
+
+        foreach (var iface in matchingIfaces)
+        {
+            if (implementationType.IsGenericTypeDefinition)
+            {
+                // Open-generic: register definition→definition (deduped — many ifaces collapse to same pair)
+                if (!services.Any(d => d.ServiceType == openGenericServiceType && d.ImplementationType == implementationType))
+                    services.AddTransient(openGenericServiceType, implementationType);
+            }
+            else
+            {
+                services.AddTransient(iface, implementationType);
+            }
+        }
     }
 }

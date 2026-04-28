@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="Hecole.Mediator.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="Hecole.Mediator.Tests/Hecole.Mediator.Tests.csproj" />
+  </Folder>
+</Solution>
