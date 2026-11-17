@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Types of the README code samples (README.md and README.pt-BR.md), in their own assembly so the samples can scan it.
+    The samples are run and compared with both READMEs by ReadmeExamplesTests in Hecole.Mediator.Tests.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Hecole.Mediator\Hecole.Mediator.csproj" />
+    <!-- The analyzer shipped in the package, loaded the way a consumer of the package gets it. -->
+    <ProjectReference Include="..\..\src\Hecole.Mediator.Analyzers\Hecole.Mediator.Analyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

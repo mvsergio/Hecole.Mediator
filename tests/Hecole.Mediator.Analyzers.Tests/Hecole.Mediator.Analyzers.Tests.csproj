@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Runs the analyzers on sample code compiled in memory (CSharpCompilation + CompilationWithAnalyzers), with plain xUnit
+    Assert; no analyzer testing package. The analyzer assembly is referenced twice: as a library (to instantiate the
+    analyzers) and as an analyzer of this project (like any consumer).
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Hecole.Mediator\Hecole.Mediator.csproj" />
+    <ProjectReference Include="..\..\src\Hecole.Mediator.Analyzers\Hecole.Mediator.Analyzers.csproj" OutputItemType="Analyzer" />
+  </ItemGroup>
+
+</Project>

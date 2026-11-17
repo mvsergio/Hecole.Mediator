@@ -1,0 +1,60 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hecole.Mediator</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>Hecole.Mediator</PackageId>
+    <Version>$(HecoleMediatorVersion)</Version>
+    <Authors>Hecole</Authors>
+    <Description>In-process mediator for .NET 10+ with the contracts IRequest, IRequestHandler, ISender, IPublisher, IMediator, IPipelineBehavior and INotificationPublisher. Assembly scanning or explicit registration, pipeline behaviors in registration order, sequential or parallel notification publishers, optional built-in behaviors (DataAnnotations validation, logging, performance, exceptions), optional start-up verification and a Roslyn analyzer in the package. MIT license.</Description>
+    <PackageTags>mediator;cqrs;request;handler;notifications;pipeline;behaviors;dependency-injection;analyzers</PackageTags>
+    <PackageReleaseNotes>2.0.0: rewrite; not source compatible with 1.x. Changes: https://github.com/mvsergio/Hecole.Mediator/blob/master/CHANGELOG.md. Migration: https://github.com/mvsergio/Hecole.Mediator/blob/master/docs/migration-1.x-to-2.0.md</PackageReleaseNotes>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/mvsergio/Hecole.Mediator</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/mvsergio/Hecole.Mediator</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hecole.Mediator.Tests" />
+  </ItemGroup>
+
+  <!--
+    Roslyn analyzer shipped in this package under analyzers/dotnet/cs. Built with the library, not referenced by it,
+    not run on it, and never a package dependency (PrivateAssets="all").
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Hecole.Mediator.Analyzers\Hecole.Mediator.Analyzers.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);AddHecoleMediatorAnalyzerToPackage</TargetsForTfmSpecificContentInPackage>
+  </PropertyGroup>
+
+  <Target Name="AddHecoleMediatorAnalyzerToPackage">
+    <MSBuild Projects="..\Hecole.Mediator.Analyzers\Hecole.Mediator.Analyzers.csproj" Targets="GetTargetPath" RemoveProperties="TargetFramework;RuntimeIdentifier">
+      <Output TaskParameter="TargetOutputs" ItemName="HecoleMediatorAnalyzerAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="@(HecoleMediatorAnalyzerAssembly)" PackagePath="analyzers/dotnet/cs" />
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

@@ -1,276 +1,362 @@
-🇧🇷 Português | [🇺🇸 English](./README.md)
+# Hecole.Mediator
 
-# 🧩 Hecole.Mediator
+[English](README.md)
 
-[![NuGet](https://img.shields.io/nuget/v/Hecole.Mediator)](https://www.nuget.org/packages/Hecole.Mediator)
-[![NuGet Downloads](https://img.shields.io/nuget/dt/Hecole.Mediator)](https://www.nuget.org/packages/Hecole.Mediator)
-[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512BD4)](https://dotnet.microsoft.com)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.txt)
+Mediator em processo para .NET 10 ou superior. Um pedido (request) vai para exatamente um handler, uma notification vai
+para quantos handlers houver, e pipeline behaviors envolvem todo pedido. Os contratos públicos são `IRequest`,
+`IRequestHandler`, `ISender`, `IPublisher`, `IMediator`, `IPipelineBehavior` e `INotificationPublisher`.
 
-Uma implementação **leve** e **performática** do padrão **Mediator** para **.NET 8** e **.NET 10**, inspirada no **MediatR**.
+É para aplicações que usam `Microsoft.Extensions.DependencyInjection` e querem erros de configuração, como dois handlers
+para um pedido, apontados no registro ou na partida. Licença MIT.
 
-Projetada para projetos **modulares** baseados em **Clean Architecture**, com suporte a **CQRS** (Commands, Queries, Requests e Notifications), **pipelines de behaviors assíncronos** (validação, logging, monitoramento de performance e tratamento de exceções) e **integração nativa** com `Microsoft.Extensions.DependencyInjection`.
+## Conteúdo
 
-Ideal para sistemas com módulos independentes que precisam de **orquestração de use cases com baixo acoplamento**.
+- [Instalação](#instalação)
+- [Início rápido](#início-rápido)
+- [Pedidos sem resposta](#pedidos-sem-resposta)
+- [Notifications e publishers](#notifications-e-publishers)
+- [Pipeline behaviors](#pipeline-behaviors)
+- [Behaviors prontos (opcionais)](#behaviors-prontos-opcionais)
+- [Verificação na partida](#verificação-na-partida)
+- [Analyzers](#analyzers)
+- [Notas de comportamento](#notas-de-comportamento)
+- [Ainda não suportado](#ainda-não-suportado)
+- [Atualizando da 1.x](#atualizando-da-1x)
+- [Requisitos](#requisitos)
+- [Mais documentação](#mais-documentação)
+- [Licença](#licença)
 
----
-
-## 🚀 Features Principais
-
-- ✅ **Suporte a CQRS** — `IRequest<TResponse>`, `IRequestHandler<TRequest, TResponse>`, `INotification` e `INotificationHandler<TNotification>`.
-
-- 🧠 **Pipeline de Behaviors Assíncronos** — Cadeia de middlewares para cross-cutting concerns: **validação assíncrona** com FluentValidation (`ValidateAsync` + `MustAsync` — corrigido na v1.2.0), **logging estruturado**, **monitoramento de performance** e **captura de exceções**.
-
-- ⚙️ **Registro Automático via DI** — Extensão `AddHecoleMediator` para scan automático de assemblies e registro de handlers/behaviors.
-
-- ⚡ **Performance Otimizada** — Caching de invokers com `ConcurrentDictionary` para evitar reflection no hot path; **execução paralela de notifications** via `Task.WhenAll`.
-
-- 🧱 **Robustez** — Tratamento isolado de exceções por notification handler, suporte a múltiplos validators e semântica fire-and-forget para notifications.
-
-- 🎯 **Multi-Targeting** — Suporte a `net8.0` e `net10.0` no mesmo pacote NuGet. O runtime resolve o target correto automaticamente.
-
-- 🧩 **Dependências Opcionais** — Core depende apenas de `Microsoft.Extensions.DependencyInjection`. FluentValidation e Logging são opcionais.
-
-- 🧭 **Alinhado com Clean Architecture** — Interfaces puras para Domain/SharedKernel e implementações plugáveis na camada Infrastructure.
-
----
-
-## 🧰 Requisitos
-
-- **.NET 8.0** ou **.NET 10.0** ou superior.
-- Pacotes opcionais:
-  - `FluentValidation` (para `ValidationBehavior`)
-  - `Microsoft.Extensions.Logging` (para logging estruturado)
-
----
-
-## 💾 Instalação
-
-Via NuGet:
+## Instalação
 
 ```bash
 dotnet add package Hecole.Mediator
 ```
 
-Ou como referência de projeto:
+O pacote contém a biblioteca e um analyzer Roslyn. Os contratos ficam no namespace `Hecole.Mediator`, os métodos de
+registro em `Microsoft.Extensions.DependencyInjection`, os behaviors opcionais em `Hecole.Mediator.Behaviors` e os
+publishers de notification em `Hecole.Mediator.NotificationPublishers`.
 
-```bash
-git clone https://github.com/mvsergio/Hecole.Mediator.git
-```
+## Início rápido
 
-```xml
-<ProjectReference Include="..\Hecole.Mediator\Hecole.Mediator.csproj" />
-```
-
----
-
-## 🧠 Uso
-
-### Registro no DI (`Program.cs`)
+Um pedido, sua resposta e seu handler:
 
 ```csharp
-using Hecole.Mediator.Implementation.Extensions;
-using System.Reflection;
+public sealed record CreateOrder(string Customer, decimal Total) : IRequest<OrderId>;
 
-var builder = WebApplication.CreateBuilder(args);
+public sealed record OrderId(Guid Value);
 
-// Registra o Mediator e escaneia assemblies (ex.: camada Application)
-builder.Services.AddHecoleMediator(
-    Assembly.GetAssembly(typeof(CreateInstitutionCommandHandler))
-);
-
-// Behaviors globais (ordem de registro importa: primeiro registrado = mais externo)
-builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(UnhandledExceptionBehavior<,>));
-builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
-builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(PerformanceBehavior<,>));
-builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
-
-// Registrar validators
-builder.Services.AddTransient<IValidator<CreateInstitutionCommand>, CreateInstitutionCommandValidator>();
-```
-
-> **`AddHecoleMediator`** registra `ICoreMediator` como **Scoped** (recomendado — funciona com `DbContext` scoped).
->
-> **`AddCoreMediator`** registra `ICoreMediator` como **Singleton** (use quando todas as dependências também são singletons).
-
----
-
-### Handler de Command / Query
-
-```csharp
-using Hecole.Mediator.Interfaces;
-
-public record CreateInstitutionCommand(string Name) : IRequest<CreateInstitutionResult>;
-public record CreateInstitutionResult(Guid Id);
-
-public class CreateInstitutionCommandHandler
-    : IRequestHandler<CreateInstitutionCommand, CreateInstitutionResult>
+public sealed class CreateOrderHandler : IRequestHandler<CreateOrder, OrderId>
 {
-    private readonly IRepository _repository;
+    public Task<OrderId> Handle(CreateOrder request, CancellationToken cancellationToken)
+        => Task.FromResult(new OrderId(Guid.NewGuid()));
+}
+```
 
-    public CreateInstitutionCommandHandler(IRepository repository)
-    {
-        _repository = repository;
-    }
+Registre os handlers varrendo um assembly. Só os assemblies informados são varridos; handlers concretos e não genéricos
+de pedido e de notification entram como transient. Pipeline behaviors não são varridos.
 
-    public async Task<CreateInstitutionResult> Handle(
-        CreateInstitutionCommand request,
-        CancellationToken cancellationToken)
+```csharp
+services.AddHecoleMediator(cfg => cfg.RegisterServicesFromAssemblyContaining<CreateOrder>());
+```
+
+Ou registre cada handler de forma explícita, sem varredura. `AddRequestHandler` e `AddNotificationHandler` podem ser
+chamados antes ou depois de `AddHecoleMediator`, e as duas formas podem ser misturadas.
+
+```csharp
+services.AddHecoleMediator(_ => { });
+services.AddRequestHandler<CreateOrder, OrderId, CreateOrderHandler>();
+services.AddRequestHandler<CancelOrder, CancelOrderHandler>();
+services.AddNotificationHandler<OrderCreated, SendConfirmationEmail>();
+services.AddNotificationHandler<OrderCreated, UpdateSalesReport>();
+```
+
+Envie o pedido por `ISender` (ou `IMediator`, que é `ISender` mais `IPublisher`):
+
+```csharp
+public sealed class OrdersEndpoint(ISender sender)
+{
+    public Task<OrderId> Create(string customer, decimal total, CancellationToken cancellationToken)
+        => sender.Send(new CreateOrder(customer, total), cancellationToken);
+}
+```
+
+Regras de registro:
+
+| Regra | Detalhe |
+|---|---|
+| Um handler por pedido | Dois handlers diferentes para o mesmo pedido lançam `InvalidOperationException` em `AddHecoleMediator` ou `AddRequestHandler`, com os dois nomes de tipo |
+| Sem duplicação | O mesmo assembly, handler ou behavior registrado de novo (por varredura, de forma explícita ou em outra chamada de `AddHecoleMediator`) entra uma vez |
+| `AddHecoleMediator` mais de uma vez | Permitido (por exemplo, uma vez por módulo). Toda chamada precisa usar os mesmos `Lifetime`, `RequireScope` e publisher de notification; senão lança |
+| Tipo exato | O pedido é despachado pelo tipo real. Um pedido derivado sem handler próprio não usa o handler do tipo base |
+| Tempo de vida | Handlers são transient. `IMediator`, `ISender` e `IPublisher` são transient por padrão; `cfg.Lifetime` muda isso |
+| Handler registrado direto no container | `services.AddTransient<IRequestHandler<A, B>, H>()` também funciona |
+| `RequireScope` (opcional, desligado por padrão) | Com `true`, `Send` e `Publish` lançam se o mediator veio do provider raiz em vez de um scope. Não combina com `Lifetime = Singleton` |
+
+## Pedidos sem resposta
+
+```csharp
+public sealed record CancelOrder(Guid OrderId) : IRequest;
+
+public sealed class CancelOrderHandler : IRequestHandler<CancelOrder>
+{
+    public Task Handle(CancelOrder request, CancellationToken cancellationToken)
     {
-        var id = await _repository.SaveAsync(request, cancellationToken);
-        return new CreateInstitutionResult(id);
+        // Cancel the order.
+        return Task.CompletedTask;
     }
 }
 ```
 
----
+```csharp
+await sender.Send(new CancelOrder(orderId.Value), cancellationToken);
+```
 
-### Handler de Notification
+Dentro do pipeline, o pedido sem resposta tem `TResponse = Unit`, então os mesmos behaviors rodam para os dois tipos de
+pedido. Quando o tipo do pedido só é conhecido em execução, `Send(object)` devolve a resposta, ou `Unit.Value` para
+pedido sem resposta:
 
 ```csharp
-using Hecole.Mediator.Interfaces;
+object request = new CreateOrder("ACME", 10m);
+object? response = await sender.Send(request, cancellationToken); // an OrderId
+object? none = await sender.Send((object)new CancelOrder(orderId.Value), cancellationToken); // Unit.Value
+```
 
-public record InstitutionCreatedEvent(Guid Id, string Name) : INotification;
+`Send(object)` lança `ArgumentException` quando o objeto não é um pedido.
 
-public class SendWelcomeEmailHandler : INotificationHandler<InstitutionCreatedEvent>
+## Notifications e publishers
+
+```csharp
+public sealed record OrderCreated(Guid OrderId) : INotification;
+
+public sealed class SendConfirmationEmail : INotificationHandler<OrderCreated>
 {
-    public async Task Handle(InstitutionCreatedEvent notification, CancellationToken cancellationToken)
+    public Task Handle(OrderCreated notification, CancellationToken cancellationToken)
     {
-        // Enviar e-mail de boas-vindas
-        await Task.CompletedTask;
+        // Send the e-mail.
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class UpdateSalesReport : INotificationHandler<OrderCreated>
+{
+    public Task Handle(OrderCreated notification, CancellationToken cancellationToken)
+    {
+        // Update the report.
+        return Task.CompletedTask;
     }
 }
 ```
 
-Notifications são despachadas para **todos os handlers registrados em paralelo** via `Task.WhenAll`. Se um handler lançar exceção, os demais ainda executam — a exceção é propagada ao caller após todos os handlers completarem.
-
----
-
-### Controller
-
 ```csharp
-using Hecole.Mediator.Interfaces;
-using Microsoft.AspNetCore.Mvc;
-
-[ApiController]
-[Route("api/institutions")]
-public class InstitutionController : ControllerBase
-{
-    private readonly ICoreMediator _mediator;
-
-    public InstitutionController(ICoreMediator mediator)
-    {
-        _mediator = mediator;
-    }
-
-    [HttpPost]
-    public async Task<IActionResult> Create(
-        [FromBody] CreateInstitutionCommand command,
-        CancellationToken cancellationToken)
-    {
-        var result = await _mediator.Send(command, cancellationToken);
-        return Ok(result);
-    }
-}
+await publisher.Publish(new OrderCreated(orderId.Value), cancellationToken);
 ```
 
----
+`IPublisher.Publish` tem também a forma `Publish(object)`. O `INotificationPublisher` decide como os handlers rodam:
 
-### Validação com `MustAsync()` (corrigido na v1.2.0)
+| Publisher | Comportamento |
+|---|---|
+| `ForeachAwaitPublisher` (padrão) | Um handler por vez, na ordem de registro, cada um aguardado. A primeira exceção interrompe os demais e chega ao chamador |
+| `TaskWhenAllPublisher` | Inicia todos os handlers e depois aguarda todos. A `Task` devolvida carrega todas as exceções. Um handler que lança antes de devolver a `Task` não impede os outros |
+| O seu | Implemente `INotificationPublisher` e use `cfg.NotificationPublisherType` (resolvido do container) ou `cfg.NotificationPublisher` (uma instância) |
 
 ```csharp
-using FluentValidation;
-
-public class CreateInstitutionCommandValidator : AbstractValidator<CreateInstitutionCommand>
+services.AddHecoleMediator(cfg =>
 {
-    public CreateInstitutionCommandValidator(IRepository repository)
-    {
-        RuleFor(x => x.Name)
-            .NotEmpty().WithMessage("Name is required")
-            .MaximumLength(200).WithMessage("Name too long");
-
-        RuleFor(x => x.Name)
-            .MustAsync(async (name, ct) =>
-            {
-                return !await repository.ExistsAsync(name, ct);
-            })
-            .WithMessage("An institution with this name already exists");
-    }
-}
+    cfg.RegisterServicesFromAssemblyContaining<CreateOrder>();
+    cfg.NotificationPublisher = new TaskWhenAllPublisher();
+});
 ```
 
-> Na v1.1.0 e anteriores, regras `MustAsync()` eram **ignoradas silenciosamente** porque o `ValidationBehavior` chamava `Validate()` (síncrono). Desde a v1.2.0, ele usa corretamente `ValidateAsync()` com `Task.WhenAll`, e o `CancellationToken` é propagado.
+Notification sem handler não faz nada. Handlers de um tipo base ou de `INotification` não rodam para uma notification
+derivada (tipo exato). A mesma classe de handler registrada duas vezes roda uma vez.
 
----
+## Pipeline behaviors
 
-### Custom Behavior
+Um behavior envolve o handler. Pode rodar código antes e depois, mudar a resposta ou devolver sem chamar `next` (aí o
+handler nem é criado).
 
 ```csharp
-using Hecole.Mediator.Interfaces;
-using Hecole.Mediator.Interfaces.Behaviors;
-
-public class AuditBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
-    where TRequest : IRequest<TResponse>
+public sealed class StopwatchBehavior<TRequest, TResponse>(ILogger<StopwatchBehavior<TRequest, TResponse>> logger)
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : notnull
 {
-    public async Task<TResponse> Handle(
-        TRequest request,
-        RequestHandlerDelegate<TResponse> next,
-        CancellationToken cancellationToken)
+    public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
     {
-        // Antes do handler
-        Console.WriteLine($"Processando {typeof(TRequest).Name}");
-
+        var start = Stopwatch.GetTimestamp();
         var response = await next();
-
-        // Depois do handler
-        Console.WriteLine($"Concluído {typeof(TRequest).Name}");
-
+        logger.LogInformation("{Request} took {Elapsed} ms", typeof(TRequest).Name, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
         return response;
     }
 }
 ```
 
-Registre no container DI:
+Behaviors rodam na ordem de registro: o primeiro registrado é o mais externo.
 
 ```csharp
-builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(AuditBehavior<,>));
+services.AddHecoleMediator(cfg =>
+{
+    cfg.RegisterServicesFromAssemblyContaining<CreateOrder>();
+    cfg.AddOpenBehavior(typeof(StopwatchBehavior<,>)); // outermost
+    cfg.AddOpenBehavior(typeof(ValidationBehavior<,>)); // runs after StopwatchBehavior, before the handler
+});
 ```
 
----
-
-## 🔧 Behaviors Incluídos
-
-| Behavior | Descrição |
+| Tema | Regra |
 |---|---|
-| `ValidationBehavior<,>` | Executa todos os `IValidator<TRequest>` via `ValidateAsync`. Lança `ValidationException` em caso de falha. |
-| `LoggingBehavior<,>` | Loga início/fim do request com tempo decorrido. |
-| `PerformanceBehavior<,>` | Loga warning quando um request leva mais de 500ms. |
-| `UnhandledExceptionBehavior<,>` | Captura e loga exceções não tratadas, depois re-lança. |
+| Registro | `cfg.AddOpenBehavior(typeof(B<,>))`, `cfg.AddOpenBehaviors(...)`, `cfg.AddBehavior<TImplementation>()`, `cfg.AddBehavior<TService, TImplementation>()`; cada um aceita um `ServiceLifetime` opcional (transient por padrão). `services.AddTransient(typeof(IPipelineBehavior<,>), typeof(B<,>))` também funciona e mantém seu lugar na ordem |
+| Restrições | Um behavior aberto cujas restrições genéricas não servem para um pedido é pulado naquele pedido |
+| Forma do behavior aberto | Exatamente dois parâmetros de tipo, declarado como `B<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>`. Outras formas são recusadas por `AddOpenBehavior`; registre-as fechadas com `AddBehavior` |
+| Token de cancelamento | `next()` repassa o token do chamador; `next(token)` repassa `token` |
+| Instâncias | Behaviors são resolvidos do container a cada `Send`, então seus tempos de vida são respeitados |
 
----
+## Behaviors prontos (opcionais)
 
-## 🤝 Contribuições
+Quatro behaviors vêm em `Hecole.Mediator.Behaviors`. Nenhum é registrado se você não adicionar.
 
-Contribuições são **bem-vindas**!
-
-```bash
-git clone https://github.com/mvsergio/Hecole.Mediator.git
-git checkout -b feature/minha-feature
-git commit -m "Adiciona minha feature"
-git push origin feature/minha-feature
+```csharp
+services.AddHecoleMediator(cfg => cfg
+    .RegisterServicesFromAssemblyContaining<CreateOrder>()
+    .AddOpenBehavior(typeof(UnhandledExceptionBehavior<,>))
+    .AddOpenBehavior(typeof(LoggingBehavior<,>))
+    .AddOpenBehavior(typeof(PerformanceBehavior<,>))
+    .AddOpenBehavior(typeof(ValidationBehavior<,>)));
+services.AddSingleton(new PerformanceBehaviorOptions { Threshold = TimeSpan.FromSeconds(1) });
 ```
 
-Abra um **Pull Request** com uma descrição das alterações.
-Adicione **testes unitários** e siga o estilo de código existente (`#nullable enable`, `async/await`).
+| Behavior | O que faz | Eventos de log |
+|---|---|---|
+| `ValidationBehavior<,>` | Valida o pedido com `System.ComponentModel.DataAnnotations` (atributos de propriedade, depois atributos de classe e `IValidatableObject`). Em falha lança `RequestValidationException` (uma `ValidationException`) com todos os erros em `Errors`; o handler não roda | — |
+| `LoggingBehavior<,>` | Registra início, fim, falha (só o nome do tipo da exceção) e cancelamento, com o tempo decorrido | 1001, 1002, 1003, 1004 (Information) |
+| `PerformanceBehavior<,>` | Registra um aviso quando o pedido passa de `PerformanceBehaviorOptions.Threshold` (500 ms por padrão) | 2001 (Warning) |
+| `UnhandledExceptionBehavior<,>` | Registra a exceção e relança. Cancelamento pedido pelo chamador é registrado em Debug | 3001 (Error), 3002 (Debug) |
 
----
+O objeto do pedido nunca vai para o log: só o nome do tipo. Os behaviors de log precisam de `ILogger<T>` no container
+(`services.AddLogging()`, que os builders do ASP.NET Core e do Generic Host já chamam).
 
-## ⚖️ Licença
+Em record posicional, os atributos de validação vão na propriedade:
 
-Distribuído sob a **MIT License**. Veja [LICENSE](./LICENSE) para detalhes.
+```csharp
+public sealed record RegisterCustomer(
+    [property: Required, EmailAddress] string Email,
+    [property: Range(18, 130)] int Age) : IRequest<Guid>;
 
----
+public sealed class RegisterCustomerHandler : IRequestHandler<RegisterCustomer, Guid>
+{
+    public Task<Guid> Handle(RegisterCustomer request, CancellationToken cancellationToken)
+        => Task.FromResult(Guid.NewGuid());
+}
+```
 
-## 📋 Changelog
+```csharp
+public sealed class CustomersEndpoint(ISender sender)
+{
+    public async Task<IReadOnlyList<string>> Register(string email, int age, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await sender.Send(new RegisterCustomer(email, age), cancellationToken);
+            return [];
+        }
+        catch (RequestValidationException exception)
+        {
+            // One ValidationResult per error, in property order.
+            return exception.Errors.Select(error => $"{string.Join(", ", error.MemberNames)}: {error.ErrorMessage}").ToList();
+        }
+    }
+}
+```
 
-Veja [CHANGELOG.md](./CHANGELOG.md) para a lista completa de mudanças.
+Se a falha de validação deve ser valor de retorno em vez de exceção, escreva o seu behavior: os prontos são
+implementações comuns de `IPipelineBehavior`.
+
+## Verificação na partida
+
+`VerifyHecoleMediator` é opcional e só roda quando você chama, em geral logo depois de montar o container. Só lê os
+registros (nenhum handler, behavior ou publisher é criado) e lança `MediatorConfigurationException` com todos os
+problemas encontrados; `Problems` traz um por item.
+
+```csharp
+using var provider = services.BuildServiceProvider();
+provider.VerifyHecoleMediator(typeof(CreateOrder).Assembly);
+```
+
+Confere que todo pedido registrado tem exatamente um handler no container, que todo tipo concreto de pedido dos
+assemblies informados tem exatamente um handler e implementa uma única interface de pedido, e que o publisher de
+notification e os handlers de notification registrados pela biblioteca estão no container. Numa aplicação ASP.NET Core,
+chame em `app.Services`. `IRequestCatalog`, resolvido do container, lista os pedidos conhecidos no registro.
+
+## Analyzers
+
+O pacote inclui um analyzer Roslyn. Ele não acrescenta dependência em tempo de execução.
+
+| Id | Detecta | Padrão |
+|---|---|---|
+| HM0001 | Tipo de pedido sem handler na compilação | Ligada (Info) |
+| HM0002 | Mais de um handler para o mesmo pedido na compilação | Ligada (Info) |
+| HM1001 | Varredura de assembly | Desligada |
+| HM1002 | `Lifetime = ServiceLifetime.Singleton` | Desligada |
+| HM1003 | Registro de pipeline behavior | Desligada |
+| HM1004 | `TaskWhenAllPublisher` | Desligada |
+| HM1005 | Handler sem `AddRequestHandler` correspondente | Desligada |
+
+As regras `HM1xxx` apontam recursos legítimos que um projeto pode decidir proibir; ligue-as no `.editorconfig`:
+
+```ini
+[*.cs]
+dotnet_diagnostic.HM1001.severity = error
+```
+
+Detalhes, heurísticas e falsos positivos conhecidos: [docs/analyzers.md](docs/analyzers.md) (em inglês).
+
+## Notas de comportamento
+
+| Tema | Comportamento |
+|---|---|
+| Contratos | `IBaseRequest`, `IRequest`, `IRequest<TResponse>`, `Unit`, `INotification`, `IRequestHandler<TRequest, TResponse>`, `IRequestHandler<TRequest>`, `INotificationHandler<TNotification>`, `ISender`, `IPublisher`, `IMediator`, `IPipelineBehavior<TRequest, TResponse>`, `RequestHandlerDelegate<TResponse>`, `INotificationPublisher`, `NotificationHandlerExecutor`, `ForeachAwaitPublisher`, `TaskWhenAllPublisher` |
+| Configuração | `AddHecoleMediator(cfg => ...)` com `HecoleMediatorConfiguration`: `RegisterServicesFromAssembly`, `RegisterServicesFromAssemblies`, `RegisterServicesFromAssemblyContaining`, `AddBehavior`, `AddOpenBehavior`, `AddOpenBehaviors`, `Lifetime`, `NotificationPublisher`, `NotificationPublisherType` |
+| Dois handlers para um pedido | Lança no registro, com os dois nomes |
+| `AddHecoleMediator` chamado de novo com outro `Lifetime`, `RequireScope` ou publisher | Lança, com os dois valores |
+| Tipo de behavior ou de publisher inválido | Lança em `AddHecoleMediator` |
+| Pipeline | Behaviors vêm do container na ordem de registro; o handler só é criado quando o pipeline chega nele; `next()` mantém o token do chamador |
+| `TaskWhenAllPublisher`, handler que lança antes de devolver a `Task` | A exceção vai para a `Task` daquele handler; os outros handlers rodam |
+| Notifications | O publisher padrão roda um handler por vez; a mesma classe de handler roda uma vez; despacho pelo tipo real exato |
+| Despacho | Um executor tipado é criado no registro; reflection roda uma vez por tipo de pedido para handler registrado só no container |
+| Extras opcionais | `AddRequestHandler`, `AddNotificationHandler`, `RequireScope`, `VerifyHecoleMediator`, `IRequestCatalog`, behaviors prontos, regras do analyzer |
+
+## Ainda não suportado
+
+| Recurso | Alternativa hoje |
+|---|---|
+| Pedidos com resposta em fluxo (respondidos com `IAsyncEnumerable<T>`, com pipeline próprio) | Nenhuma |
+| Pre-processors e post-processors | Um pipeline behavior |
+| Exception handlers e exception actions | Um pipeline behavior com `try`/`catch` |
+| Classe de mediator pública, ou troca da implementação do mediator por tipo | Resolver `IMediator`, `ISender` ou `IPublisher` |
+| Handlers de pedido genéricos abertos | Handlers fechados |
+| Behaviors abertos cujos parâmetros de tipo não são `<TRequest, TResponse>`, nessa ordem | Registrar fechados com `AddBehavior` |
+
+Esses itens podem entrar depois sem quebrar a API existente.
+
+## Atualizando da 1.x
+
+Veja [docs/migration-1.x-to-2.0.md](docs/migration-1.x-to-2.0.md) (em inglês).
+
+## Requisitos
+
+| Item | Valor |
+|---|---|
+| Target framework | `net10.0` (.NET 10 ou superior) |
+| Dependências | `Microsoft.Extensions.DependencyInjection.Abstractions` e `Microsoft.Extensions.Logging.Abstractions`, 10.0.0 ou superior |
+| Container | Testado com `Microsoft.Extensions.DependencyInjection`. Outros containers não foram testados |
+
+## Mais documentação
+
+| Documento | Conteúdo |
+|---|---|
+| [docs/analyzers.md](docs/analyzers.md) | Regras e configuração do analyzer (em inglês) |
+| [docs/benchmarks.md](docs/benchmarks.md) | Custo medido de `Send` e `Publish`, 1.3.0 contra 2.0, e os limites dessa medição (em inglês) |
+| [docs/migration-1.x-to-2.0.md](docs/migration-1.x-to-2.0.md) | Atualização a partir da 1.x (em inglês) |
+| [CHANGELOG.md](CHANGELOG.md) | Mudanças por versão |
+
+## Licença
+
+MIT. Veja [LICENSE.txt](LICENSE.txt).

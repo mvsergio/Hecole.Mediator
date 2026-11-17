@@ -1,8 +1,27 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="Hecole.Mediator.csproj" />
+    <Project Path="src/Hecole.Mediator/Hecole.Mediator.csproj" />
+    <Project Path="src/Hecole.Mediator.Analyzers/Hecole.Mediator.Analyzers.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="Hecole.Mediator.Tests/Hecole.Mediator.Tests.csproj" />
+    <Project Path="tests/Hecole.Mediator.Analyzers.Tests/Hecole.Mediator.Analyzers.Tests.csproj" />
+    <Project Path="tests/Hecole.Mediator.Tests/Hecole.Mediator.Tests.csproj" />
+    <Project Path="tests/Hecole.Mediator.Tests.Readme/Hecole.Mediator.Tests.Readme.csproj" />
+    <Project Path="tests/Hecole.Mediator.Tests.ScanConflict/Hecole.Mediator.Tests.ScanConflict.csproj" />
+    <Project Path="tests/Hecole.Mediator.Tests.ScanTarget/Hecole.Mediator.Tests.ScanTarget.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Hecole.Mediator.Benchmarks/Hecole.Mediator.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/docs/">
+    <File Path="docs/analyzers.md" />
+    <File Path="docs/benchmarks.md" />
+    <File Path="docs/migration-1.x-to-2.0.md" />
+  </Folder>
+  <Folder Name="/build/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path=".github/workflows/ci.yml" />
   </Folder>
 </Solution>

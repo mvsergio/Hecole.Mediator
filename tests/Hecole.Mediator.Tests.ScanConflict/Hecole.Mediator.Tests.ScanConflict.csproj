@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Assembly with a second handler for a request of ScanTarget: scanning both must fail. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hecole.Mediator.Tests.ScanTarget\Hecole.Mediator.Tests.ScanTarget.csproj" />
+    <!-- The analyzer shipped in the package, loaded the way a consumer of the package gets it. -->
+    <ProjectReference Include="..\..\src\Hecole.Mediator.Analyzers\Hecole.Mediator.Analyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
