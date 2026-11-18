@@ -36,7 +36,7 @@ public sealed class RequestValidationException : ValidationException
     private static string Format(Type requestType, ReadOnlyCollection<ValidationResult> errors)
     {
         var sb = new StringBuilder()
-            .Append("Validation failed for ").Append(requestType.Name).Append(": ")
+            .Append("Validation failed for ").Append(TypeNames.Format(requestType)).Append(": ")
             .Append(errors.Count).Append(errors.Count == 1 ? " error." : " errors.");
         foreach (var error in errors)
         {

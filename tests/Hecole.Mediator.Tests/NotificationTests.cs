@@ -222,6 +222,52 @@ public class NotificationTests
         Assert.Equal([typeof(FirstHandler)], publisher.HandlerTypes);
     }
 
+    public static TheoryData<Action<HecoleMediatorConfiguration>> ExplicitPublisherChoices => new()
+    {
+        cfg => cfg.NotificationPublisherType = typeof(CountingPublisher),
+        cfg => cfg.NotificationPublisher = new TaskWhenAllPublisher(),
+        cfg => cfg.NotificationPublisher = new ForeachAwaitPublisher(),
+    };
+
+    [Theory]
+    [MemberData(nameof(ExplicitPublisherChoices))]
+    public void PublisherRegisteredInContainer_AndExplicitChoiceInConfiguration_ThrowsNamingBoth(Action<HecoleMediatorConfiguration> choose)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<INotificationPublisher>(new ReversingSkippingPublisher());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => services.AddHecoleMediator(choose));
+
+        Assert.Contains(typeof(ReversingSkippingPublisher).FullName!, ex.Message);
+        Assert.Contains("NotificationPublisher", ex.Message);
+        Assert.Single(services, d => d.ServiceType == typeof(INotificationPublisher));
+        Assert.DoesNotContain(services, d => d.ServiceType == typeof(IMediator));
+    }
+
+    [Fact]
+    public void PublisherRegisteredInContainerByType_AndExplicitChoice_ThrowsNamingTheRegisteredType()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<INotificationPublisher, CountingPublisher>();
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            services.AddHecoleMediator(cfg => cfg.NotificationPublisherType = typeof(ForeachAwaitPublisher)));
+
+        Assert.Contains(typeof(CountingPublisher).FullName!, ex.Message);
+        Assert.Contains(typeof(ForeachAwaitPublisher).FullName!, ex.Message);
+    }
+
+    [Fact]
+    public void KeyedPublisherInContainer_DoesNotBlockTheConfiguredPublisher()
+    {
+        var services = new ServiceCollection();
+        services.AddKeyedSingleton<INotificationPublisher>("other", new ReversingSkippingPublisher());
+
+        services.AddHecoleMediator(cfg => cfg.NotificationPublisherType = typeof(CountingPublisher));
+
+        Assert.Equal(typeof(CountingPublisher), Assert.Single(services, d => d.ServiceType == typeof(INotificationPublisher) && !d.IsKeyedService).ImplementationType);
+    }
+
     [Theory]
     [InlineData(typeof(IPublisher))]
     [InlineData(typeof(AbstractPublisher))]
@@ -468,9 +514,10 @@ public class NotificationTests
         Assert.Equal(["first:n", "second:n"], host.GetRequiredService<Log>().Entries);
     }
 
-    // The same handler class returned more than once by the container runs once, at its first position.
+    // Nothing is de-duplicated at run time: what the container returns runs, in its order. A handler class registered
+    // twice directly in the container runs twice (VerifyHecoleMediator reports it).
     [Fact]
-    public async Task SameHandlerClassTwiceInContainer_RunsOnce()
+    public async Task SameHandlerClassTwiceInContainer_RunsTwice()
     {
         var publisher = new ReversingSkippingPublisher();
         using var host = Build(
@@ -486,7 +533,39 @@ public class NotificationTests
 
         await host.Mediator.Publish(new Note("n"));
 
-        Assert.Equal([typeof(FirstHandler), typeof(SecondHandler), typeof(SyncThrowingHandler)], publisher.HandlerTypes);
+        Assert.Equal(
+            [typeof(FirstHandler), typeof(SecondHandler), typeof(FirstHandler), typeof(SyncThrowingHandler), typeof(SyncThrowingHandler)],
+            publisher.HandlerTypes);
+        // Run in reverse order by the publisher, skipping SyncThrowingHandler.
+        Assert.Equal(["first:n", "second:n", "first:n"], host.GetRequiredService<Log>().Entries);
+    }
+
+    [Fact]
+    public async Task TwoHandlersWrappedByTheSameDecoratorClass_BothRun()
+    {
+        using var host = Build(s =>
+        {
+            s.AddTransient<INotificationHandler<Note>>(sp => new LoggingDecorator(sp.GetRequiredService<Log>(), new FirstHandler(sp.GetRequiredService<Log>())));
+            s.AddTransient<INotificationHandler<Note>>(sp => new LoggingDecorator(sp.GetRequiredService<Log>(), new SecondHandler(sp.GetRequiredService<Log>())));
+        });
+
+        await host.Mediator.Publish(new Note("n"));
+
+        Assert.Equal(["decorated", "first:n", "decorated", "second:n"], host.GetRequiredService<Log>().Entries);
+    }
+
+    [Fact]
+    public async Task OneHandlerClassFromTwoFactoryRegistrations_RunsTwice()
+    {
+        using var host = Build(s =>
+        {
+            s.AddTransient<INotificationHandler<Note>>(sp => new FirstHandler(sp.GetRequiredService<Log>()));
+            s.AddTransient<INotificationHandler<Note>>(sp => new FirstHandler(sp.GetRequiredService<Log>()));
+        });
+
+        await host.Mediator.Publish(new Note("n"));
+
+        Assert.Equal(["first:n", "first:n"], host.GetRequiredService<Log>().Entries);
     }
 
     // ---- Executors: created once per notification type ---------------------------------------------------------------
@@ -510,9 +589,15 @@ public class NotificationTests
         using var host = Build(_ => { });
         var catalog = host.Root.GetRequiredService<MediatorRuntime>().Notifications;
 
+        Assert.Equal(0, catalog.OnDemandCount);
+
         var first = catalog.GetExecutor(typeof(OtherNote));
+        // Kept after the first use: the reflection that finds it runs once (the executor itself is the static
+        // instance of its type, so Assert.Same alone would hold without the cache).
+        Assert.Equal(1, catalog.OnDemandCount);
         var second = catalog.GetExecutor(typeof(OtherNote));
 
+        Assert.Equal(1, catalog.OnDemandCount);
         Assert.Same(first, second);
         Assert.Same(NotificationExecutor<OtherNote>.Instance, first);
     }
@@ -677,6 +762,16 @@ public class NotificationTests
         {
             log.Add($"value:{notification.Number}");
             return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>Decorator: wraps another handler of the same notification.</summary>
+    public sealed class LoggingDecorator(Log log, INotificationHandler<Note> inner) : INotificationHandler<Note>
+    {
+        public Task Handle(Note notification, CancellationToken cancellationToken)
+        {
+            log.Add("decorated");
+            return inner.Handle(notification, cancellationToken);
         }
     }
 

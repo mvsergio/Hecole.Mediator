@@ -8,7 +8,9 @@ namespace Hecole.Mediator.Internal;
 /// <summary>
 /// Publishes one notification type: resolves its handlers from the container
 /// (<c>IEnumerable&lt;INotificationHandler&lt;TNotification&gt;&gt;</c>, exact type, on every call so lifetimes are kept),
-/// drops repeated handler classes and hands the rest to the <see cref="INotificationPublisher"/>.
+/// and hands every handler the container returned, in its order, to the <see cref="INotificationPublisher"/>. Nothing is
+/// de-duplicated here: the library itself never registers the same handler twice for a notification, and a handler
+/// registered twice directly in the container runs twice (<c>VerifyHecoleMediator</c> reports it).
 /// One stateless instance per notification type, shared by every call; no reflection on the hot path.
 /// </summary>
 internal abstract class NotificationExecutor
@@ -51,38 +53,21 @@ internal sealed class NotificationExecutor<TNotification> : NotificationExecutor
         if (handlers.Length == 0)
             return [];
 
-        // The same handler class returned more than once (registered twice) runs once, at the
-        // position of its first registration.
-        var distinct = 0;
-        Span<bool> keep = handlers.Length <= 64 ? stackalloc bool[handlers.Length] : new bool[handlers.Length];
-        for (var i = 0; i < handlers.Length; i++)
+        var count = 0;
+        foreach (var handler in handlers)
         {
-            if (handlers[i] is { } handler && !SeenBefore(handlers, i, handler.GetType()))
-            {
-                keep[i] = true;
-                distinct++;
-            }
+            if (handler is not null)
+                count++;
         }
 
-        var executors = new NotificationHandlerExecutor[distinct];
+        var executors = new NotificationHandlerExecutor[count];
         for (int i = 0, j = 0; i < handlers.Length; i++)
         {
-            if (keep[i])
-                executors[j++] = new NotificationHandlerExecutor(handlers[i], handlers[i].Invoke);
+            if (handlers[i] is { } handler)
+                executors[j++] = new NotificationHandlerExecutor(handler, handler.Invoke);
         }
 
         return executors;
-    }
-
-    private static bool SeenBefore(INotificationHandler<TNotification>[] handlers, int index, Type handlerType)
-    {
-        for (var i = 0; i < index; i++)
-        {
-            if (handlers[i]?.GetType() == handlerType)
-                return true;
-        }
-
-        return false;
     }
 }
 
@@ -105,6 +90,9 @@ internal sealed class NotificationCatalog(IEnumerable<NotificationExecutor> regi
         registered.ToFrozenDictionary(static e => e.NotificationType);
 
     private readonly ConcurrentDictionary<Type, NotificationExecutor> _onDemand = new();
+
+    /// <summary>Notification types whose executor was created on first use and kept (diagnostics and tests).</summary>
+    public int OnDemandCount => _onDemand.Count;
 
     public NotificationExecutor GetExecutor(Type notificationType)
     {

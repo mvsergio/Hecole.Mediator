@@ -29,7 +29,7 @@ public class VerificationTests
     // ---- IRequestCatalog --------------------------------------------------------------------------------------------
 
     [Fact]
-    public void Catalog_ListsRequestsOfScanAndAddRequestHandler_InRegistrationOrder()
+    public void Catalog_ListsRequestsOfScanAndAddRequestHandler_InRegistrationOrder_ThenDirectRegistrations()
     {
         using var provider = Build(s =>
         {
@@ -47,6 +47,7 @@ public class VerificationTests
                 new RequestDescriptor(typeof(ScanQuery), typeof(string), typeof(ScanQueryHandler)),
                 new RequestDescriptor(typeof(ScanCommand), typeof(Unit), ScanCommandHandlerType),
                 new RequestDescriptor(typeof(VoidCommand), typeof(Unit), typeof(VoidCommandHandler)),
+                new RequestDescriptor(typeof(TestQuery), typeof(TestResult), typeof(TestQueryHandler)), // registered directly: listed last
             ],
             catalog.Requests);
         Assert.Same(catalog, provider.CreateScope().ServiceProvider.GetRequiredService<IRequestCatalog>());
@@ -157,6 +158,10 @@ public class VerificationTests
     {
         using var provider = Build(_ => { }, cfg => cfg.RegisterServicesFromAssembly(ScanAssembly));
 
+        // The assembly also holds GenericScanQuery<T> (open generic) and AbstractScanQuery (abstract), both without handler.
+        Assert.True(typeof(GenericScanQuery<>).ContainsGenericParameters);
+        Assert.True(typeof(AbstractScanQuery).IsAbstract);
+
         var problem = Assert.Single(VerifyFails(provider, ScanAssembly).Problems);
 
         Assert.Contains($"'{typeof(ScanSkippedQuery).FullName}' has no handler", problem);
@@ -215,6 +220,108 @@ public class VerificationTests
 
         Assert.Contains(typeof(TestNotificationHandler).FullName!, problem);
         Assert.Contains(typeof(TestNotification).FullName!, problem);
+    }
+
+    [Fact]
+    public void NotificationHandlerReplacedByDecorator_IsNotReported()
+    {
+        using var provider = Build(s =>
+        {
+            s.AddNotificationHandler<TestNotification, TestNotificationHandler>();
+            s.AddNotificationHandler<TestNotification, ThrowingNotificationHandler>();
+            // A decorator replaces the typed registration with a factory, as a container decoration extension does.
+            var index = s.IndexOf(s.Single(d => d.ServiceType == typeof(INotificationHandler<TestNotification>) && d.ImplementationType == typeof(TestNotificationHandler)));
+            s[index] = ServiceDescriptor.Transient<INotificationHandler<TestNotification>>(_ => new NotificationDecorator(new TestNotificationHandler()));
+        });
+
+        provider.VerifyHecoleMediator();
+    }
+
+    [Fact]
+    public void NotificationHandlersMissing_MoreThanFactoryRegistrations_AreReported()
+    {
+        using var provider = Build(s =>
+        {
+            s.AddNotificationHandler<TestNotification, TestNotificationHandler>();
+            s.AddNotificationHandler<TestNotification, ThrowingNotificationHandler>();
+            s.RemoveAll<INotificationHandler<TestNotification>>();
+            s.AddTransient<INotificationHandler<TestNotification>>(_ => new NotificationDecorator(new TestNotificationHandler()));
+        });
+
+        var problems = VerifyFails(provider).Problems;
+
+        Assert.Equal(2, problems.Count);
+        Assert.Contains(problems, p => p.Contains(typeof(TestNotificationHandler).FullName!, StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains(typeof(ThrowingNotificationHandler).FullName!, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SameNotificationHandlerClassTwiceInContainer_IsReported()
+    {
+        using var provider = Build(s =>
+        {
+            s.AddNotificationHandler<TestNotification, TestNotificationHandler>();
+            s.AddTransient<INotificationHandler<TestNotification>, TestNotificationHandler>();
+            s.AddTransient<INotificationHandler<TestNotification>, ThrowingNotificationHandler>();
+            s.AddTransient<INotificationHandler<TestNotification>>(_ => new ThrowingNotificationHandler());
+        });
+
+        var problem = Assert.Single(VerifyFails(provider).Problems);
+
+        Assert.Contains(typeof(TestNotificationHandler).FullName!, problem);
+        Assert.Contains(typeof(TestNotification).FullName!, problem);
+        Assert.Contains("2 times", problem);
+    }
+
+    [Fact]
+    public void OpenGenericRequestHandlerInContainer_IsReported()
+    {
+        using var provider = Build(s =>
+        {
+            s.AddTransient(typeof(IRequestHandler<,>), typeof(OpenQueryHandler<,>));
+            s.AddTransient(typeof(IRequestHandler<>), typeof(OpenCommandHandler<>));
+        });
+
+        var problems = VerifyFails(provider).Problems;
+
+        Assert.Equal(2, problems.Count);
+        Assert.Contains("Hecole.Mediator.IRequestHandler<,>", problems[0]);
+        Assert.Contains(nameof(OpenQueryHandler<,>), problems[0]);
+        Assert.Contains("Hecole.Mediator.IRequestHandler<>", problems[1]);
+        Assert.Contains(nameof(OpenCommandHandler<>), problems[1]);
+        Assert.All(problems, p => Assert.Contains("not supported", p));
+    }
+
+    public static TheoryData<Type> ReplacedLists =>
+    [
+        typeof(IEnumerable<IPipelineBehavior<TestCommand, TestResult>>),
+        typeof(IEnumerable<INotificationHandler<TestNotification>>),
+        typeof(IEnumerable<IRequestHandler<TestCommand, TestResult>>),
+        typeof(IEnumerable<IRequestHandler<VoidCommand>>),
+    ];
+
+    [Theory]
+    [MemberData(nameof(ReplacedLists))]
+    public void EnumerableOfMediatorServiceRegistered_IsReported(Type enumerableType)
+    {
+        using var provider = Build(s => s.AddSingleton(enumerableType, Array.CreateInstance(enumerableType.GetGenericArguments()[0], 0)));
+
+        var problem = Assert.Single(VerifyFails(provider).Problems);
+
+        Assert.Contains("System.Collections.Generic.IEnumerable<", problem);
+        Assert.Contains("replaces the list", problem);
+    }
+
+    [Fact]
+    public void KeyedOrUnrelatedEnumerable_IsNotReported()
+    {
+        using var provider = Build(s =>
+        {
+            s.AddKeyedSingleton<IEnumerable<INotificationHandler<TestNotification>>>("k", Array.Empty<INotificationHandler<TestNotification>>());
+            s.AddSingleton<IEnumerable<string>>(["a"]);
+        });
+
+        provider.VerifyHecoleMediator();
     }
 
     // ---- All problems at once ------------------------------------------------------------------------------------------
@@ -333,13 +440,32 @@ public class VerificationTests
             cfg => cfg.AddOpenBehavior(typeof(OpenGenericTestBehavior<,>)).AddOpenBehavior(typeof(PassThroughBehavior<,>)));
 
         provider.VerifyHecoleMediator();
-        var skipped = MediatorVerification.FindSkippedOpenBehaviors(provider);
+        var skipped = provider.GetRequiredService<IRequestCatalog>().Requests
+            .SelectMany(static r => r.SkippedBehaviors.Select(b => (r.RequestType, b)))
+            .ToList();
 
         // OpenGenericTestBehavior requires TRequest : IRequest<TResponse>; VoidCommand is an IRequest (TResponse = Unit).
         Assert.Equal([(typeof(VoidCommand), typeof(OpenGenericTestBehavior<,>))], skipped);
     }
 
     // ---- Types ------------------------------------------------------------------------------------------------------
+
+    public sealed class NotificationDecorator(INotificationHandler<TestNotification> inner) : INotificationHandler<TestNotification>
+    {
+        public Task Handle(TestNotification notification, CancellationToken cancellationToken) => inner.Handle(notification, cancellationToken);
+    }
+
+    public sealed class OpenQueryHandler<TRequest, TResponse> : IRequestHandler<TRequest, TResponse>
+        where TRequest : IRequest<TResponse>
+    {
+        public Task<TResponse> Handle(TRequest request, CancellationToken cancellationToken) => Task.FromResult(default(TResponse)!);
+    }
+
+    public sealed class OpenCommandHandler<TRequest> : IRequestHandler<TRequest>
+        where TRequest : IRequest
+    {
+        public Task Handle(TRequest request, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
 
     public sealed record VoidCommand : IRequest;
 

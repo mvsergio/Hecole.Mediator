@@ -13,10 +13,10 @@
 
   <!--
     Package version, used by the library and by the analyzer shipped in it. AssemblyVersion and FileVersion follow it
-    (2.0.0.0); the analyzer assembly changes identity with every package version.
+    (2.0.1.0); the analyzer assembly changes identity with every package version.
   -->
   <PropertyGroup>
-    <HecoleMediatorVersion>2.0.0</HecoleMediatorVersion>
+    <HecoleMediatorVersion>2.0.1</HecoleMediatorVersion>
   </PropertyGroup>
 
 </Project>

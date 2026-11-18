@@ -45,9 +45,12 @@ public sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(next);
 
-        var context = new ValidationContext(request, _serviceProvider, items: null);
+        // Boxed once: the validator requires the instance it validates to be the context's ObjectInstance, and a struct
+        // request passed twice would be boxed into two different objects.
+        object instance = request;
+        var context = new ValidationContext(instance, _serviceProvider, items: null);
         var errors = new List<ValidationResult>();
-        if (!Validator.TryValidateObject(request, context, errors, validateAllProperties: true))
+        if (!Validator.TryValidateObject(instance, context, errors, validateAllProperties: true))
         {
             throw new RequestValidationException(typeof(TRequest), errors);
         }

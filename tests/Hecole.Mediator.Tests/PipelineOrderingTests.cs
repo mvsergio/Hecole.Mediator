@@ -93,15 +93,22 @@ public class PipelineOrderingTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<Recorder>();
-        services.AddRequestHandler<TestCommand, TestResult, RecordingCommandHandler>();
+        services.AddRequestHandler<TestCommand, TestResult, CreationRecordingCommandHandler>();
         services.AddHecoleMediator(cfg => cfg.AddBehavior<ShortCircuitBehavior>());
 
         using var root = services.BuildServiceProvider();
         using var scope = root.CreateScope();
-        var result = await scope.ServiceProvider.GetRequiredService<ISender>().Send(new TestCommand("x"));
+        var sender = scope.ServiceProvider.GetRequiredService<ISender>();
+        var recorder = root.GetRequiredService<Recorder>();
+
+        // The handler records its construction, so this proves "not created", not only "not called".
+        scope.ServiceProvider.GetRequiredService<IRequestHandler<TestCommand, TestResult>>();
+        Assert.Equal(["created"], recorder.Entries);
+
+        var result = await sender.Send(new TestCommand("x"));
 
         Assert.Equal("short", result.Value);
-        Assert.Empty(root.GetRequiredService<Recorder>().Entries);
+        Assert.Equal(["created"], recorder.Entries);
     }
 
     [Fact]
@@ -169,23 +176,153 @@ public class PipelineOrderingTests
         Assert.Equal(["2:before", "handler", "2:after", "2:before", "handler", "2:after"], root.GetRequiredService<Recorder>().Entries);
     }
 
+    // Token rule: next() continues with the token the calling behavior received, so a timeout set by an outer behavior
+    // reaches every inner behavior and the handler (before 2.0.1 the inner next() went back to the caller's token).
     [Fact]
-    public async Task Pipeline_OuterPassesOwnToken_InnerCallsNextWithoutToken_HandlerReceivesCallerToken()
+    public async Task Pipeline_OuterPassesTimeoutToken_InnerBehaviorsCallNextWithoutToken_HandlerReceivesTimeoutToken()
     {
         using var caller = new CancellationTokenSource();
-        using var own = new CancellationTokenSource();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var seenByMiddle = new List<CancellationToken>();
         var seenByInner = new List<CancellationToken>();
         using var host = TestHost.Build(s =>
         {
             s.AddRequestHandler<TokenQuery, CancellationToken, TokenQueryHandler>();
-            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenReplacingBehavior(own.Token));
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenReplacingBehavior(timeout.Token));
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenObservingBehavior(seenByMiddle));
             s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenObservingBehavior(seenByInner));
         });
 
         var handlerToken = await host.Mediator.Send(new TokenQuery(), caller.Token);
 
-        Assert.Equal(own.Token, Assert.Single(seenByInner));
-        Assert.Equal(caller.Token, handlerToken);
+        Assert.Equal(timeout.Token, Assert.Single(seenByMiddle));
+        Assert.Equal(timeout.Token, Assert.Single(seenByInner));
+        Assert.Equal(timeout.Token, handlerToken);
+    }
+
+    [Fact]
+    public async Task Pipeline_OuterPassesTimeoutToken_OnlyBehaviorBeforeHandler_HandlerReceivesTimeoutToken()
+    {
+        using var caller = new CancellationTokenSource();
+        using var timeout = new CancellationTokenSource();
+        var seenByInner = new List<CancellationToken>();
+        using var host = TestHost.Build(s =>
+        {
+            s.AddRequestHandler<TokenQuery, CancellationToken, TokenQueryHandler>();
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenReplacingBehavior(timeout.Token));
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenObservingBehavior(seenByInner));
+        });
+
+        Assert.Equal(timeout.Token, await host.Mediator.Send(new TokenQuery(), caller.Token));
+        Assert.Equal(timeout.Token, Assert.Single(seenByInner));
+    }
+
+    // CancellationToken.None cannot be told from an omitted argument: it continues with the token the behavior received.
+    [Fact]
+    public async Task Pipeline_NextWithCancellationTokenNone_ContinuesWithTheTokenTheBehaviorReceived()
+    {
+        using var caller = new CancellationTokenSource();
+        using var host = TestHost.Build(s =>
+        {
+            s.AddRequestHandler<TokenQuery, CancellationToken, TokenQueryHandler>();
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenReplacingBehavior(CancellationToken.None));
+        });
+
+        Assert.Equal(caller.Token, await host.Mediator.Send(new TokenQuery(), caller.Token));
+    }
+
+    [Fact]
+    public async Task Pipeline_InnerNextWithCancellationTokenNone_ContinuesWithTheTokenTheInnerBehaviorReceived_NotTheCallers()
+    {
+        using var caller = new CancellationTokenSource();
+        using var timeout = new CancellationTokenSource();
+        using var host = TestHost.Build(s =>
+        {
+            s.AddRequestHandler<TokenQuery, CancellationToken, TokenQueryHandler>();
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenReplacingBehavior(timeout.Token));
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenReplacingBehavior(CancellationToken.None));
+        });
+
+        Assert.Equal(timeout.Token, await host.Mediator.Send(new TokenQuery(), caller.Token));
+    }
+
+    [Fact]
+    public async Task Pipeline_RetryWithADifferentTokenPerCall_EachCallRunsWithItsOwnToken()
+    {
+        using var caller = new CancellationTokenSource();
+        using var first = new CancellationTokenSource();
+        using var second = new CancellationTokenSource();
+        var seenByInner = new List<CancellationToken>();
+        var handlerTokens = new List<CancellationToken>();
+        using var host = TestHost.Build(s =>
+        {
+            s.AddRequestHandler<TokenQuery, CancellationToken, TokenQueryHandler>();
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenRetryBehavior(handlerTokens, first.Token, second.Token, default));
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenObservingBehavior(seenByInner));
+        });
+
+        await host.Mediator.Send(new TokenQuery(), caller.Token);
+
+        // The third call is next(): the token the retrying behavior received, the caller's.
+        Assert.Equal([first.Token, second.Token, caller.Token], seenByInner);
+        Assert.Equal([first.Token, second.Token, caller.Token], handlerTokens);
+    }
+
+    [Fact]
+    public async Task Pipeline_RetryInsideSingleBehavior_EachCallReachesTheHandlerWithItsOwnToken()
+    {
+        using var caller = new CancellationTokenSource();
+        using var first = new CancellationTokenSource();
+        var handlerTokens = new List<CancellationToken>();
+        using var host = TestHost.Build(s =>
+        {
+            s.AddRequestHandler<TokenQuery, CancellationToken, TokenQueryHandler>();
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenRetryBehavior(handlerTokens, first.Token, default));
+        });
+
+        await host.Mediator.Send(new TokenQuery(), caller.Token);
+
+        Assert.Equal([first.Token, caller.Token], handlerTokens);
+    }
+
+    [Fact]
+    public async Task Pipeline_OutermostBehavior_ReceivesExactlyTheCallersToken_InEveryForm()
+    {
+        using var caller = new CancellationTokenSource();
+        var seen = new List<CancellationToken>();
+        using var host = TestHost.Build(s =>
+        {
+            s.AddRequestHandler<TokenQuery, CancellationToken, TokenQueryHandler>();
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenObservingBehavior(seen));
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenReplacingBehavior(CancellationToken.None));
+        });
+
+        Assert.Equal(caller.Token, await host.Mediator.Send(new TokenQuery(), caller.Token));
+        Assert.Equal(caller.Token, await host.Mediator.Send((object)new TokenQuery(), caller.Token));
+
+        Assert.Equal([caller.Token, caller.Token], seen);
+    }
+
+    [Fact]
+    public async Task Pipeline_VoidRequest_FollowsTheSameTokenRule()
+    {
+        using var caller = new CancellationTokenSource();
+        using var timeout = new CancellationTokenSource();
+        var outermost = new List<CancellationToken>();
+        var handlerTokens = new List<CancellationToken>();
+        using var host = TestHost.Build(s =>
+        {
+            s.AddSingleton(handlerTokens);
+            s.AddRequestHandler<VoidTokenCommand, VoidTokenCommandHandler>();
+            s.AddTransient<IPipelineBehavior<VoidTokenCommand, Unit>>(_ => new VoidTokenBehavior(outermost, replaceWith: timeout.Token));
+            s.AddTransient<IPipelineBehavior<VoidTokenCommand, Unit>>(_ => new VoidTokenBehavior([], replaceWith: default));
+        });
+
+        await host.Mediator.Send(new VoidTokenCommand(), caller.Token);
+        await host.Mediator.Send((object)new VoidTokenCommand(), caller.Token);
+
+        Assert.Equal([caller.Token, caller.Token], outermost);
+        Assert.Equal([timeout.Token, timeout.Token], handlerTokens);
     }
 
     [Fact]
@@ -227,6 +364,23 @@ public class PipelineOrderingTests
         public Task<TestResult> Handle(TestCommand request, CancellationToken cancellationToken)
         {
             recorder.Add("handler");
+            return Task.FromResult(new TestResult($"Handled: {request.Name}"));
+        }
+    }
+
+    private sealed class CreationRecordingCommandHandler : IRequestHandler<TestCommand, TestResult>
+    {
+        private readonly Recorder _recorder;
+
+        public CreationRecordingCommandHandler(Recorder recorder)
+        {
+            _recorder = recorder;
+            recorder.Add("created");
+        }
+
+        public Task<TestResult> Handle(TestCommand request, CancellationToken cancellationToken)
+        {
+            _recorder.Add("handler");
             return Task.FromResult(new TestResult($"Handled: {request.Name}"));
         }
     }
@@ -330,5 +484,41 @@ public class PipelineOrderingTests
     {
         public Task<CancellationToken> Handle(TokenQuery request, RequestHandlerDelegate<CancellationToken> next, CancellationToken cancellationToken)
             => next(token);
+    }
+
+    /// <summary>Calls next once per token given, in order, and records the token each call reached the handler with.</summary>
+    private sealed class TokenRetryBehavior(List<CancellationToken> handlerTokens, params CancellationToken[] tokens) : IPipelineBehavior<TokenQuery, CancellationToken>
+    {
+        public async Task<CancellationToken> Handle(TokenQuery request, RequestHandlerDelegate<CancellationToken> next, CancellationToken cancellationToken)
+        {
+            var last = default(CancellationToken);
+            foreach (var token in tokens)
+            {
+                last = await next(token);
+                handlerTokens.Add(last);
+            }
+
+            return last;
+        }
+    }
+
+    public sealed record VoidTokenCommand : IRequest;
+
+    private sealed class VoidTokenCommandHandler(List<CancellationToken> tokens) : IRequestHandler<VoidTokenCommand>
+    {
+        public Task Handle(VoidTokenCommand request, CancellationToken cancellationToken)
+        {
+            tokens.Add(cancellationToken);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class VoidTokenBehavior(List<CancellationToken> seen, CancellationToken replaceWith) : IPipelineBehavior<VoidTokenCommand, Unit>
+    {
+        public Task<Unit> Handle(VoidTokenCommand request, RequestHandlerDelegate<Unit> next, CancellationToken cancellationToken)
+        {
+            seen.Add(cancellationToken);
+            return next(replaceWith);
+        }
     }
 }

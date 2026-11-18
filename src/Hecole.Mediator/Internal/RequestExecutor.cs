@@ -43,7 +43,7 @@ internal abstract class RequestExecutor<TResponse> : RequestExecutor
 }
 
 /// <summary>Executor of a request that produces <typeparamref name="TResponse"/>.</summary>
-internal sealed class Executor<TRequest, TResponse> : RequestExecutor<TResponse>
+internal sealed class Executor<TRequest, TResponse> : RequestExecutor<TResponse>, IHandlerInvoker<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
     public override Type RequestType => typeof(TRequest);
@@ -54,20 +54,16 @@ internal sealed class Executor<TRequest, TResponse> : RequestExecutor<TResponse>
         var behaviors = RequestPipeline.ResolveBehaviors<TRequest, TResponse>(services);
 
         return behaviors.Length == 0
-            ? ResolveHandler<IRequestHandler<TRequest, TResponse>>(services, typeof(TRequest)).Handle(typed, cancellationToken)
-            : new Invocation(typed, services, cancellationToken).Run(behaviors);
+            ? InvokeHandler(typed, services, cancellationToken)
+            : RequestPipeline.Run<TRequest, TResponse, Executor<TRequest, TResponse>>(typed, services, behaviors, cancellationToken);
     }
 
-    private sealed class Invocation(TRequest request, IServiceProvider services, CancellationToken cancellationToken)
-        : PipelineInvocation<TRequest, TResponse>(request, services, cancellationToken)
-    {
-        protected override Task<TResponse> InvokeHandler(CancellationToken cancellationToken)
-            => ResolveHandler<IRequestHandler<TRequest, TResponse>>(Services, typeof(TRequest)).Handle(Request, cancellationToken);
-    }
+    public static Task<TResponse> InvokeHandler(TRequest request, IServiceProvider services, CancellationToken cancellationToken)
+        => ResolveHandler<IRequestHandler<TRequest, TResponse>>(services, typeof(TRequest)).Handle(request, cancellationToken);
 }
 
 /// <summary>Executor of a request without response value; the pipeline sees <see cref="Unit"/>.</summary>
-internal sealed class VoidExecutor<TRequest> : RequestExecutor<Unit>
+internal sealed class VoidExecutor<TRequest> : RequestExecutor<Unit>, IHandlerInvoker<TRequest, Unit>
     where TRequest : IRequest
 {
     public override Type RequestType => typeof(TRequest);
@@ -78,8 +74,8 @@ internal sealed class VoidExecutor<TRequest> : RequestExecutor<Unit>
         var behaviors = RequestPipeline.ResolveBehaviors<TRequest, Unit>(services);
 
         return behaviors.Length == 0
-            ? ToUnit(ResolveHandler<IRequestHandler<TRequest>>(services, typeof(TRequest)).Handle(typed, cancellationToken))
-            : new Invocation(typed, services, cancellationToken).Run(behaviors);
+            ? InvokeHandler(typed, services, cancellationToken)
+            : RequestPipeline.Run<TRequest, Unit, VoidExecutor<TRequest>>(typed, services, behaviors, cancellationToken);
     }
 
     public override Task SendAsTask(object request, IServiceProvider services, CancellationToken cancellationToken)
@@ -90,8 +86,11 @@ internal sealed class VoidExecutor<TRequest> : RequestExecutor<Unit>
         // Without behaviors the handler's task is the answer; no Unit adaptation needed.
         return behaviors.Length == 0
             ? ResolveHandler<IRequestHandler<TRequest>>(services, typeof(TRequest)).Handle(typed, cancellationToken)
-            : new Invocation(typed, services, cancellationToken).Run(behaviors);
+            : RequestPipeline.Run<TRequest, Unit, VoidExecutor<TRequest>>(typed, services, behaviors, cancellationToken);
     }
+
+    public static Task<Unit> InvokeHandler(TRequest request, IServiceProvider services, CancellationToken cancellationToken)
+        => ToUnit(ResolveHandler<IRequestHandler<TRequest>>(services, typeof(TRequest)).Handle(request, cancellationToken));
 
     private static Task<Unit> ToUnit(Task task)
     {
@@ -102,12 +101,5 @@ internal sealed class VoidExecutor<TRequest> : RequestExecutor<Unit>
             await task.ConfigureAwait(false);
             return Unit.Value;
         }
-    }
-
-    private sealed class Invocation(TRequest request, IServiceProvider services, CancellationToken cancellationToken)
-        : PipelineInvocation<TRequest, Unit>(request, services, cancellationToken)
-    {
-        protected override Task<Unit> InvokeHandler(CancellationToken cancellationToken)
-            => ToUnit(ResolveHandler<IRequestHandler<TRequest>>(Services, typeof(TRequest)).Handle(Request, cancellationToken));
     }
 }

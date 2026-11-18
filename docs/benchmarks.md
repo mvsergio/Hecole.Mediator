@@ -82,7 +82,7 @@ Notes:
    scan of the benchmark assembly is not comparable and was not measured.
 2. "`Task.WhenAll`" is `TaskWhenAllPublisher` in 2.0 and the only notification strategy of 1.3.0. 2.0 runs notification
    handlers one at a time by default (`ForeachAwaitPublisher`); 1.3.0 has no such mode.
-3. The 4 built-in behaviors are not the same code in both versions. In 1.3.0, validation is FluentValidation with no
+3. The 4 built-in behaviors are not the same code in both versions. In 1.3.0, validation runs a third-party package with no
    validator registered (the behavior only checks that the list is empty); in 2.0 it is a DataAnnotations
    `Validator.TryValidateObject` call on a request without attributes. 1.3.0 logging calls `LogInformation` with a
    `NullLogger`; 2.0 uses `LoggerMessage`-generated methods that check `IsEnabled` first.
@@ -107,7 +107,7 @@ What the table supports, for this machine and these scenarios:
 
 ## Limits
 
-- **This is not BenchmarkDotNet.** There is no process isolation per benchmark, no outlier analysis, no confidence
+- **This is not a statistical benchmark harness.** There is no process isolation per benchmark, no outlier analysis, no confidence
   interval and no hardware counters. The ranges come from 5 interleaved runs on a laptop that was also running other
   applications. Differences smaller than the ranges are noise.
 - One machine, one operating system, one runtime version, one container (`Microsoft.Extensions.DependencyInjection`).

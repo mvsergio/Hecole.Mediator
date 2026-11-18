@@ -1,4 +1,5 @@
 using System.Reflection;
+using Hecole.Mediator.Internal;
 using Hecole.Mediator.NotificationPublishers;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -12,6 +13,14 @@ public sealed class HecoleMediatorConfiguration
 {
     private readonly List<Assembly> _assemblies = [];
     private readonly List<ServiceDescriptor> _behaviors = [];
+    private readonly INotificationPublisher _defaultPublisher;
+
+    /// <summary>Creates a configuration with the defaults described on each property.</summary>
+    public HecoleMediatorConfiguration()
+    {
+        _defaultPublisher = new ForeachAwaitPublisher();
+        NotificationPublisher = _defaultPublisher;
+    }
 
     /// <summary>
     /// Lifetime of <see cref="IMediator"/>, <see cref="ISender"/> and <see cref="IPublisher"/>.
@@ -34,17 +43,29 @@ public sealed class HecoleMediatorConfiguration
     /// Publisher instance that runs the handlers of each notification, registered as a singleton
     /// <see cref="INotificationPublisher"/>. Defaults to <see cref="ForeachAwaitPublisher"/> (one handler at a time, in
     /// registration order). Ignored when <see cref="NotificationPublisherType"/> is set.
-    /// When <c>AddHecoleMediator</c> is called more than once, every call must choose the same publisher; an
-    /// <see cref="INotificationPublisher"/> registered directly in the container is kept.
+    /// When <c>AddHecoleMediator</c> is called more than once, every call must choose the same publisher.
+    /// An <see cref="INotificationPublisher"/> registered directly in the container before the first
+    /// <c>AddHecoleMediator</c> call is kept only when this configuration leaves the publisher at its default; if the
+    /// configuration chooses a publisher (assigns this property or sets <see cref="NotificationPublisherType"/>),
+    /// <c>AddHecoleMediator</c> throws <see cref="InvalidOperationException"/> instead of ignoring the choice.
     /// </summary>
-    public INotificationPublisher NotificationPublisher { get; set; } = new ForeachAwaitPublisher();
+    public INotificationPublisher NotificationPublisher { get; set; }
 
     /// <summary>
     /// Publisher type, registered as <see cref="INotificationPublisher"/> with <see cref="Lifetime"/>, so it can take
     /// dependencies from the container. Wins over <see cref="NotificationPublisher"/> when both are set.
     /// When <c>AddHecoleMediator</c> is called more than once, every call must choose the same publisher.
+    /// Setting it on the first <c>AddHecoleMediator</c> call while an <see cref="INotificationPublisher"/> is already
+    /// registered directly in the container throws <see cref="InvalidOperationException"/>.
     /// </summary>
     public Type? NotificationPublisherType { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> when the publisher was chosen explicitly: <see cref="NotificationPublisherType"/> is set,
+    /// or <see cref="NotificationPublisher"/> no longer holds the default instance created with this configuration.
+    /// </summary>
+    internal bool PublisherChosenExplicitly
+        => NotificationPublisherType is not null || !ReferenceEquals(NotificationPublisher, _defaultPublisher);
 
     /// <summary>Assemblies to scan, in the order they were added, without repetition.</summary>
     internal IReadOnlyList<Assembly> AssembliesToRegister => _assemblies;
@@ -77,7 +98,9 @@ public sealed class HecoleMediatorConfiguration
     /// <see cref="INotificationHandler{TNotification}"/> it defines (public or not). Pipeline behaviors are not scanned;
     /// add them with <c>AddBehavior</c> or <c>AddOpenBehavior</c>. Only the assemblies given are scanned.
     /// Scanning the same assembly again, here or in another <c>AddHecoleMediator</c> call, registers nothing new.
-    /// Two different handlers for the same request throw when <c>AddHecoleMediator</c> runs.
+    /// Two different handlers for the same request throw when <c>AddHecoleMediator</c> runs, and so does a handler whose
+    /// request type is an interface or an abstract class (it could never be sent: dispatch is by exact runtime type) or
+    /// whose response type differs from the one its request declares (<see cref="ArgumentException"/>).
     /// </summary>
     /// <param name="assembly">The assembly to scan.</param>
     /// <returns>This configuration.</returns>
@@ -135,7 +158,8 @@ public sealed class HecoleMediatorConfiguration
     /// <param name="serviceLifetime">Lifetime of the behavior.</param>
     /// <returns>This configuration.</returns>
     /// <exception cref="InvalidOperationException">The type is open generic, not concrete, or implements no
-    /// <see cref="IPipelineBehavior{TRequest, TResponse}"/>.</exception>
+    /// <see cref="IPipelineBehavior{TRequest, TResponse}"/>; or one of the closed behavior interfaces it implements could
+    /// never run (see <see cref="AddBehavior(Type, Type, ServiceLifetime)"/>).</exception>
     public HecoleMediatorConfiguration AddBehavior(Type implementationType, ServiceLifetime serviceLifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(implementationType);
@@ -149,6 +173,9 @@ public sealed class HecoleMediatorConfiguration
         }
 
         foreach (var serviceType in serviceTypes)
+            BehaviorTypes.EnsureRunnable(serviceType, implementationType);
+
+        foreach (var serviceType in serviceTypes)
             _behaviors.Add(new ServiceDescriptor(serviceType, implementationType, BehaviorTypes.Lifetime(serviceLifetime)));
         return this;
     }
@@ -157,12 +184,17 @@ public sealed class HecoleMediatorConfiguration
     /// Adds <paramref name="implementationType"/> to the container as <paramref name="serviceType"/>. The service type
     /// is a closed <see cref="IPipelineBehavior{TRequest, TResponse}"/> implemented by the behavior, or the open
     /// <c>IPipelineBehavior&lt;,&gt;</c> with an open generic behavior (as in <see cref="AddOpenBehavior"/>).
+    /// A closed behavior runs only for its exact request type, so its <c>TRequest</c> must be a concrete request type
+    /// (not an interface or an abstract class) that implements exactly one request interface, and its
+    /// <c>TResponse</c> must be the response that request declares (<see cref="Unit"/> for <see cref="IRequest"/>).
+    /// To run a behavior for a family of requests, register an open behavior with a constraint.
     /// </summary>
     /// <param name="serviceType">The behavior interface.</param>
     /// <param name="implementationType">The behavior type.</param>
     /// <param name="serviceLifetime">Lifetime of the behavior.</param>
     /// <returns>This configuration.</returns>
-    /// <exception cref="InvalidOperationException">The types do not form a valid behavior registration.</exception>
+    /// <exception cref="InvalidOperationException">The types do not form a valid behavior registration, or the closed
+    /// behavior could never run.</exception>
     public HecoleMediatorConfiguration AddBehavior(Type serviceType, Type implementationType, ServiceLifetime serviceLifetime = ServiceLifetime.Transient)
     {
         ArgumentNullException.ThrowIfNull(serviceType);
@@ -185,6 +217,7 @@ public sealed class HecoleMediatorConfiguration
                 $"'{implementationType.FullName}' does not implement '{serviceType.FullName}'.");
         }
 
+        BehaviorTypes.EnsureRunnable(serviceType, implementationType);
         _behaviors.Add(new ServiceDescriptor(serviceType, implementationType, BehaviorTypes.Lifetime(serviceLifetime)));
         return this;
     }
@@ -250,6 +283,52 @@ internal static class BehaviorTypes
 
         EnsureConcrete(type);
     }
+
+    /// <summary>
+    /// Refuses a closed behavior interface that the pipeline would never resolve: behaviors are resolved as
+    /// <c>IPipelineBehavior&lt;TRequest, TResponse&gt;</c> with the exact request type and the response it declares.
+    /// </summary>
+    public static void EnsureRunnable(Type serviceType, Type implementationType)
+    {
+        var arguments = serviceType.GetGenericArguments();
+        var requestType = arguments[0];
+        var responseType = arguments[1];
+
+        if (requestType.IsInterface || requestType.IsAbstract)
+        {
+            throw new InvalidOperationException(
+                $"'{implementationType.FullName}' is registered as '{Display(serviceType)}', whose request type is " +
+                $"{(requestType.IsInterface ? "an interface" : "an abstract class")}. Requests are dispatched by exact runtime type, " +
+                "so this behavior would never run; register an open behavior with a constraint (AddOpenBehavior) instead.");
+        }
+
+        Type? declared;
+        try
+        {
+            declared = RequestTypes.GetResponseType(requestType);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidOperationException(
+                $"'{implementationType.FullName}' is registered as '{Display(serviceType)}', whose request type is not a valid " +
+                $"request, so this behavior would never run. {ex.Message}",
+                ex);
+        }
+
+        var expected = declared ?? typeof(Unit);
+        if (responseType != expected)
+        {
+            throw new InvalidOperationException(
+                $"'{implementationType.FullName}' is registered as '{Display(serviceType)}', but the request " +
+                $"'{requestType.FullName}' declares the response '{expected.FullName}', so this behavior would never run. " +
+                $"Use IPipelineBehavior<{requestType.Name}, {expected.Name}>.");
+        }
+    }
+
+    private static string Display(Type type)
+        => type.IsGenericType
+            ? $"{type.Name[..type.Name.IndexOf('`')]}<{string.Join(", ", type.GetGenericArguments().Select(Display))}>"
+            : type.FullName ?? type.Name;
 
     public static void EnsureOpenImplementation(Type type)
     {

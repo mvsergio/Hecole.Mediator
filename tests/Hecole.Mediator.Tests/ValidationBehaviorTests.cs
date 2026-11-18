@@ -166,8 +166,8 @@ public class ValidationBehaviorTests
         var typed = Assert.IsType<RequestValidationException>(ex);
         Assert.Null(typed.Value);
         Assert.Null(typed.ValidationAttribute);
-        Assert.Contains(nameof(SignUpCommand), typed.Message, StringComparison.Ordinal);
-        Assert.Contains("1 error.", typed.Message, StringComparison.Ordinal);
+        // Same name format as the log events of the behaviors.
+        Assert.StartsWith("Validation failed for Hecole.Mediator.Tests.ValidationBehaviorTests.SignUpCommand: 1 error.", typed.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -259,6 +259,41 @@ public class ValidationBehaviorTests
         await Assert.ThrowsAsync<RequestValidationException>(() => host.Mediator.Send(new RequiredVoidCommand(null)));
 
         Assert.Equal(["ok"], host.GetRequiredService<Recorder>().Entries);
+    }
+
+    [Fact]
+    public async Task StructRequest_Valid_CallsNext()
+    {
+        var (_, nextCalls) = await Run<StructCommand, string>(new StructCommand("ok", 30));
+
+        Assert.Equal(1, nextCalls);
+    }
+
+    [Fact]
+    public async Task StructRequest_Invalid_ThrowsWithEveryError()
+    {
+        var (ex, nextCalls) = await RunInvalid(new StructCommand(null, 5));
+
+        Assert.Equal(0, nextCalls);
+        Assert.Equal([nameof(StructCommand.Name), nameof(StructCommand.Age)], ex.Errors.SelectMany(e => e.MemberNames));
+    }
+
+    [Fact]
+    public async Task StructRequest_ThroughMediator_IsValidated()
+    {
+        using var host = TestHost.Build(
+            services => services.AddRequestHandler<StructCommand, string, StructCommandHandler>(),
+            cfg => cfg.AddOpenBehavior(typeof(ValidationBehavior<,>)));
+
+        Assert.Equal("ok:30", await host.Mediator.Send(new StructCommand("ok", 30)));
+        await Assert.ThrowsAsync<RequestValidationException>(() => host.Mediator.Send(new StructCommand(null, 30)));
+    }
+
+    public readonly record struct StructCommand([property: Required] string? Name, [property: Range(18, 120)] int Age) : IRequest<string>;
+
+    public sealed class StructCommandHandler : IRequestHandler<StructCommand, string>
+    {
+        public Task<string> Handle(StructCommand request, CancellationToken cancellationToken) => Task.FromResult($"{request.Name}:{request.Age}");
     }
 
     public sealed record RequiredVoidCommand([property: Required] string? Name) : IRequest;

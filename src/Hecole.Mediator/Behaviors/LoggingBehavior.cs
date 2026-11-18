@@ -14,7 +14,7 @@ namespace Hecole.Mediator.Behaviors;
 /// <item><term>1001 RequestStarting</term><description>Information, before the next step.</description></item>
 /// <item><term>1002 RequestFinished</term><description>Information, on success, with the elapsed milliseconds.</description></item>
 /// <item><term>1003 RequestFailed</term><description>Information, when the next step throws, with the exception type name (not the exception) and the elapsed milliseconds. The exception goes on to the caller unchanged.</description></item>
-/// <item><term>1004 RequestCanceled</term><description>Information, when an <see cref="OperationCanceledException"/> is thrown and the caller's token was canceled.</description></item>
+/// <item><term>1004 RequestCanceled</term><description>Information, when an <see cref="OperationCanceledException"/> is thrown and the token this behavior received was canceled (the caller's token when this behavior is the outermost; the token an outer behavior continued with otherwise).</description></item>
 /// </list>
 /// </remarks>
 /// <typeparam name="TRequest">Request type.</typeparam>

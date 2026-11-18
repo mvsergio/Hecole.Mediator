@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Runs the analyzers on sample code compiled in memory (CSharpCompilation + CompilationWithAnalyzers), with plain xUnit
+    Runs the analyzers on sample code compiled in memory (CSharpCompilation + CompilationWithAnalyzers), with the test framework's plain
     Assert; no analyzer testing package. The analyzer assembly is referenced twice: as a library (to instantiate the
     analyzers) and as an analyzer of this project (like any consumer).
   -->

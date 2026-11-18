@@ -127,6 +127,28 @@ public sealed class MultipleHandlersTests
         Assert.Empty(diagnostics);
     }
 
+    // Only a public constructor makes a decorator: an unused private one taking the interface does not hide a handler.
+    [Fact]
+    public async Task HandlerWithNonPublicConstructorTakingTheInterface_IsCounted()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            public sealed record Query : IRequest<int>;
+            public sealed class QueryHandler : IRequestHandler<Query, int>
+            {
+                public Task<int> Handle(Query request, CancellationToken cancellationToken) => Task.FromResult(1);
+            }
+            public sealed class OtherQueryHandler : IRequestHandler<Query, int>
+            {
+                public OtherQueryHandler() { }
+                private OtherQueryHandler(IRequestHandler<Query, int> unused) { }
+                internal OtherQueryHandler(IRequestHandler<Query, int> unused, int extra) { }
+                public Task<int> Handle(Query request, CancellationToken cancellationToken) => Task.FromResult(2);
+            }
+            """);
+
+        Assert.Equal(["QueryHandler", "OtherQueryHandler"], diagnostics.WithId(Id).Select(diagnostic => diagnostic.Text()));
+    }
+
     // False positive 3: abstract base and open generic handlers are not registered as such.
     [Fact]
     public async Task AbstractAndOpenGenericHandlers_AreNotCounted()

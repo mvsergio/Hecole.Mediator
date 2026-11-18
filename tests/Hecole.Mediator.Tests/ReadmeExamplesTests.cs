@@ -113,6 +113,14 @@ public sealed class ReadmeExamplesTests
         });
 
         using var host = Host(services);
+
+        // The log observations below hold in either order (a validation failure stops both a StopwatchBehavior outside
+        // it and one inside it from logging), so the order is read where the pipeline reads it: the behaviors the
+        // container returns for the request, the first being the outermost (PipelineOrderingTests runs that order).
+        Assert.Equal(
+            [typeof(StopwatchBehavior<,>), typeof(ValidationBehavior<,>)],
+            host.Get<IEnumerable<IPipelineBehavior<CreateOrder, OrderId>>>().Select(b => b.GetType().GetGenericTypeDefinition()));
+
         var sender = host.Get<ISender>();
         await sender.Send(new CreateOrder("ACME", 10m), cancellationToken);
         Assert.Contains(sink.Entries, e => e.Message.StartsWith("CreateOrder took ", StringComparison.Ordinal));
@@ -170,6 +178,45 @@ public sealed class ReadmeExamplesTests
 
         Assert.Contains(exception.Problems, p => p.Contains(nameof(CancelOrder), StringComparison.Ordinal));
         Assert.Contains(exception.Problems, p => p.Contains(nameof(RegisterCustomer), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CatalogPolicyCheck()
+    {
+        var services = new ServiceCollection();
+        services.AddHecoleMediator(cfg => cfg
+            .RegisterServicesFromAssemblyContaining<CreateOrder>()
+            .AddOpenBehavior(typeof(PermissionBehavior<,>))
+            .AddOpenBehavior(typeof(TransactionBehavior<,>)));
+
+        using var provider = services.BuildServiceProvider();
+        CommandPolicy.Check(provider.GetRequiredService<IRequestCatalog>());
+
+        var catalog = provider.GetRequiredService<IRequestCatalog>();
+        Assert.Equal(
+            [typeof(PermissionBehavior<ShipOrder, Unit>), typeof(TransactionBehavior<ShipOrder, Unit>)],
+            catalog.Find(typeof(ShipOrder))!.Behaviors);
+        Assert.Equal([typeof(PermissionBehavior<,>), typeof(TransactionBehavior<,>)], catalog.Find(typeof(CreateOrder))!.SkippedBehaviors);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CatalogPolicyCheck_FailsWhenTheOrderIsWrongOrABehaviorIsMissing(bool missing)
+    {
+        var services = new ServiceCollection();
+        services.AddHecoleMediator(cfg =>
+        {
+            cfg.RegisterServicesFromAssemblyContaining<CreateOrder>();
+            cfg.AddOpenBehavior(typeof(TransactionBehavior<,>));
+            if (!missing)
+                cfg.AddOpenBehavior(typeof(PermissionBehavior<,>));
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var exception = Assert.Throws<InvalidOperationException>(() => CommandPolicy.Check(provider.GetRequiredService<IRequestCatalog>()));
+
+        Assert.StartsWith(nameof(ShipOrder), exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

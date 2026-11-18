@@ -4,13 +4,13 @@ using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
-using Microsoft.CodeAnalysis.Operations;
 
 namespace Hecole.Mediator.Analyzers;
 
 /// <summary>
 /// HM1005 (off by default): every concrete request handler declared in the compilation needs a matching
-/// <c>AddRequestHandler</c> call in the same compilation. Kept apart from the other analyzers so it costs nothing while
+/// <c>AddRequestHandler</c> call in the same compilation (directly, or through one generic helper that forwards its type
+/// parameters, see <see cref="RegistrationCollector"/>). Kept apart from the other analyzers so it costs nothing while
 /// the rule is off.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -21,8 +21,9 @@ public sealed class ExplicitRegistrationAnalyzer : DiagnosticAnalyzer
 
     public override void Initialize(AnalysisContext context)
     {
-        // Generated code is analyzed (a generated handler or AddRequestHandler call counts) but never reported on.
-        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.Analyze);
+        // Generated code is analyzed (a generated handler or AddRequestHandler call counts) and reported on: a restrictive
+        // rule must not be silenced by a generated-code header.
+        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.Analyze | GeneratedCodeAnalysisFlags.ReportDiagnostics);
         context.EnableConcurrentExecution();
         context.RegisterCompilationStartAction(OnCompilationStart);
     }
@@ -35,18 +36,16 @@ public sealed class ExplicitRegistrationAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var state = new State(symbols, symbols.Extensions);
+        var registrations = new RegistrationCollector(symbols.Extensions);
+        var state = new State(symbols, registrations);
         context.RegisterSymbolAction(state.CollectHandler, SymbolKind.NamedType);
-        context.RegisterOperationAction(state.CollectRegistration, OperationKind.Invocation);
+        context.RegisterOperationAction(registrations.Collect, OperationKind.Invocation);
         context.RegisterCompilationEndAction(state.Report);
     }
 
-    private sealed class State(MediatorSymbols symbols, INamedTypeSymbol extensions)
+    private sealed class State(MediatorSymbols symbols, RegistrationCollector registrations)
     {
         private readonly ConcurrentDictionary<(INamedTypeSymbol Handler, ITypeSymbol Request), byte> _handlers =
-            new(PairComparer.Instance);
-
-        private readonly ConcurrentDictionary<(INamedTypeSymbol Handler, ITypeSymbol Request), byte> _registered =
             new(PairComparer.Instance);
 
         public void CollectHandler(SymbolAnalysisContext context)
@@ -66,28 +65,20 @@ public sealed class ExplicitRegistrationAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        public void CollectRegistration(OperationAnalysisContext context)
-        {
-            var method = ((IInvocationOperation)context.Operation).TargetMethod;
-            if (method.Name != "AddRequestHandler"
-                || !SymbolEqualityComparer.Default.Equals(method.ContainingType, extensions)
-                || method.TypeArguments.Length < 2)
-            {
-                return;
-            }
-
-            // AddRequestHandler<TRequest, TResponse, THandler>() or AddRequestHandler<TRequest, THandler>().
-            if (method.TypeArguments[method.TypeArguments.Length - 1] is INamedTypeSymbol handler)
-            {
-                _registered.TryAdd((handler, method.TypeArguments[0]), 0);
-            }
-        }
-
         public void Report(CompilationAnalysisContext context)
         {
+            var registered = new HashSet<(INamedTypeSymbol Handler, ITypeSymbol Request)>(PairComparer.Instance);
+            foreach (var registration in registrations.Resolve())
+            {
+                if (registration.Handler is INamedTypeSymbol handler)
+                {
+                    registered.Add((handler, registration.Request));
+                }
+            }
+
             foreach (var pair in _handlers.Keys)
             {
-                if (_registered.ContainsKey(pair))
+                if (registered.Contains(pair))
                 {
                     continue;
                 }

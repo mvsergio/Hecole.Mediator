@@ -87,10 +87,12 @@ Regras de registro:
 | Um handler por pedido | Dois handlers diferentes para o mesmo pedido lançam `InvalidOperationException` em `AddHecoleMediator` ou `AddRequestHandler`, com os dois nomes de tipo |
 | Sem duplicação | O mesmo assembly, handler ou behavior registrado de novo (por varredura, de forma explícita ou em outra chamada de `AddHecoleMediator`) entra uma vez |
 | `AddHecoleMediator` mais de uma vez | Permitido (por exemplo, uma vez por módulo). Toda chamada precisa usar os mesmos `Lifetime`, `RequireScope` e publisher de notification; senão lança |
+| Publisher já no container | Um `INotificationPublisher` registrado direto no container antes da primeira chamada de `AddHecoleMediator` é mantido quando a configuração deixa o publisher no padrão. Se a configuração escolhe um (`NotificationPublisher` ou `NotificationPublisherType`), `AddHecoleMediator` lança `InvalidOperationException` em vez de ignorar a escolha |
 | Tipo exato | O pedido é despachado pelo tipo real. Um pedido derivado sem handler próprio não usa o handler do tipo base |
+| Só registros despacháveis | Um handler cujo tipo de pedido é interface ou classe abstrata (nunca pode ser o tipo real de um pedido), ou cujo tipo de resposta difere do que o pedido declara (`AddRequestHandler<Req, object, H>()` com `Req : IRequest<string>` compila, porque `IRequest<out T>` é covariante), lança `ArgumentException` em `AddRequestHandler` ou na varredura |
 | Tempo de vida | Handlers são transient. `IMediator`, `ISender` e `IPublisher` são transient por padrão; `cfg.Lifetime` muda isso |
 | Handler registrado direto no container | `services.AddTransient<IRequestHandler<A, B>, H>()` também funciona |
-| `RequireScope` (opcional, desligado por padrão) | Com `true`, `Send` e `Publish` lançam se o mediator veio do provider raiz em vez de um scope. Não combina com `Lifetime = Singleton` |
+| `RequireScope` (opcional, desligado por padrão) | Com `true`, `Send` e `Publish` falham (`InvalidOperationException`, na task devolvida) se o mediator veio do provider raiz em vez de um scope. Não combina com `Lifetime = Singleton` |
 
 ## Pedidos sem resposta
 
@@ -122,6 +124,12 @@ object? none = await sender.Send((object)new CancelOrder(orderId.Value), cancell
 ```
 
 `Send(object)` lança `ArgumentException` quando o objeto não é um pedido.
+
+`Send` e `Publish` lançam de forma síncrona só erros de argumento: argumento nulo, objeto que não é pedido (ou
+notification) ou tipo de pedido que implementa mais de uma interface de pedido. Toda outra falha chega na task
+devolvida: a verificação de `RequireScope`, pedido sem handler, behavior, handler ou publisher que não pode ser criado e
+exceção lançada por um behavior ou handler antes de devolver a sua task. Assim,
+`await Task.WhenAll(sender.Send(a), sender.Send(b))` vê as falhas das duas chamadas.
 
 ## Notifications e publishers
 
@@ -168,7 +176,9 @@ services.AddHecoleMediator(cfg =>
 ```
 
 Notification sem handler não faz nada. Handlers de um tipo base ou de `INotification` não rodam para uma notification
-derivada (tipo exato). A mesma classe de handler registrada duas vezes roda uma vez.
+derivada (tipo exato). Todo handler que o container devolve roda: dois handlers envolvidos pela mesma classe de
+decorator rodam os dois. `AddNotificationHandler` e a varredura nunca registram o mesmo handler duas vezes; uma classe
+de handler registrada duas vezes direto no container roda duas vezes, e `VerifyHecoleMediator` aponta isso.
 
 ## Pipeline behaviors
 
@@ -205,8 +215,9 @@ services.AddHecoleMediator(cfg =>
 |---|---|
 | Registro | `cfg.AddOpenBehavior(typeof(B<,>))`, `cfg.AddOpenBehaviors(...)`, `cfg.AddBehavior<TImplementation>()`, `cfg.AddBehavior<TService, TImplementation>()`; cada um aceita um `ServiceLifetime` opcional (transient por padrão). `services.AddTransient(typeof(IPipelineBehavior<,>), typeof(B<,>))` também funciona e mantém seu lugar na ordem |
 | Restrições | Um behavior aberto cujas restrições genéricas não servem para um pedido é pulado naquele pedido |
+| Behaviors fechados | Um behavior fechado (`IPipelineBehavior<Req, Res>`) só roda para aquele tipo exato de pedido, então `AddBehavior` lança `InvalidOperationException` quando `Req` é interface, classe abstrata ou não é pedido, ou quando `Res` não é a resposta que `Req` declara (`Unit` para `IRequest`). Para uma família de pedidos, use um behavior aberto com restrição |
 | Forma do behavior aberto | Exatamente dois parâmetros de tipo, declarado como `B<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>`. Outras formas são recusadas por `AddOpenBehavior`; registre-as fechadas com `AddBehavior` |
-| Token de cancelamento | `next()` repassa o token do chamador; `next(token)` repassa `token` |
+| Token de cancelamento | O behavior mais externo recebe o token do chamador. `next()` continua com o token que o behavior recebeu; `next(token)` continua com `token`, então um behavior de timeout chega aos behaviors internos e ao handler. Um token que não pode ser cancelado (`CancellationToken.None`) vale como `next()` |
 | Instâncias | Behaviors são resolvidos do container a cada `Send`, então seus tempos de vida são respeitados |
 
 ## Behaviors prontos (opcionais)
@@ -228,10 +239,12 @@ services.AddSingleton(new PerformanceBehaviorOptions { Threshold = TimeSpan.From
 | `ValidationBehavior<,>` | Valida o pedido com `System.ComponentModel.DataAnnotations` (atributos de propriedade, depois atributos de classe e `IValidatableObject`). Em falha lança `RequestValidationException` (uma `ValidationException`) com todos os erros em `Errors`; o handler não roda | — |
 | `LoggingBehavior<,>` | Registra início, fim, falha (só o nome do tipo da exceção) e cancelamento, com o tempo decorrido | 1001, 1002, 1003, 1004 (Information) |
 | `PerformanceBehavior<,>` | Registra um aviso quando o pedido passa de `PerformanceBehaviorOptions.Threshold` (500 ms por padrão) | 2001 (Warning) |
-| `UnhandledExceptionBehavior<,>` | Registra a exceção e relança. Cancelamento pedido pelo chamador é registrado em Debug | 3001 (Error), 3002 (Debug) |
+| `UnhandledExceptionBehavior<,>` | Registra a exceção e relança. Cancelamento do token que ele recebeu (o token do chamador quando é o behavior mais externo) é registrado em Debug. Os behaviors são criados antes de o pipeline começar, então uma exceção lançada no construtor de um behavior não é vista por nenhum behavior (ela ainda chega na task devolvida por `Send`). Uma `RequestValidationException` é registrada em Warning só com o nome do tipo do pedido e a quantidade de erros (sem exceção, sem texto de erro) | 3001 (Error), 3002 (Debug), 3003 (Warning) |
 
-O objeto do pedido nunca vai para o log: só o nome do tipo. Os behaviors de log precisam de `ILogger<T>` no container
-(`services.AddLogging()`, que os builders do ASP.NET Core e do Generic Host já chamam).
+O objeto do pedido e os textos dos erros de validação nunca vão para o log: só o nome do tipo do pedido,
+com namespace, tipos aninhados unidos por `.` e argumentos genéricos em `<...>` (por exemplo
+`My.App.Orders.Create.Command` ou `My.App.Paged<My.App.Customer>`). Os behaviors de log precisam de `ILogger<T>` no container
+(`services.AddLogging()`, que os builders de host web e genérico do .NET já chamam).
 
 Em record posicional, os atributos de validação vão na propriedade:
 
@@ -282,8 +295,73 @@ provider.VerifyHecoleMediator(typeof(CreateOrder).Assembly);
 
 Confere que todo pedido registrado tem exatamente um handler no container, que todo tipo concreto de pedido dos
 assemblies informados tem exatamente um handler e implementa uma única interface de pedido, e que o publisher de
-notification e os handlers de notification registrados pela biblioteca estão no container. Numa aplicação ASP.NET Core,
-chame em `app.Services`. `IRequestCatalog`, resolvido do container, lista os pedidos conhecidos no registro.
+notification e os handlers de notification registrados pela biblioteca estão no container (um handler substituído por
+um decorator não é apontado como ausente). Também aponta uma classe de handler de notification registrada duas vezes
+para a mesma notification, um handler de pedido genérico aberto registrado no container (`IRequestHandler<,>` ou
+`IRequestHandler<>`, sem suporte) e um `IEnumerable<X>` registrado como serviço para um `IPipelineBehavior<,>`,
+`INotificationHandler<>` ou `IRequestHandler` fechado (ele substitui a lista que o container monta). Numa aplicação web,
+chame em `app.Services`.
+
+Também confere os registros da própria biblioteca. `AddHecoleMediator` guarda os registros que faz de `IMediator`,
+`ISender`, `IPublisher`, `IRequestCatalog`, do `INotificationPublisher` (o que adiciona, ou o que já estava no container e
+é mantido) e do estado interno do mediator; para cada um, o registro que o container usa (o último não keyed daquele
+serviço) precisa ser o guardado. Uma substituição (`services.Replace`), outro registro feito depois ou a remoção é
+apontada, com o que está registrado no lugar; remova o outro registro. Assim, uma aplicação que substitui `IMediator`,
+`ISender` ou `IPublisher` de propósito (por exemplo, com um decorator próprio) tem isso apontado; para rodar código em
+volta de todo pedido, use um pipeline behavior. Substituir um handler de pedido (um decorator registrado com
+`services.Replace`) não é apontado: o catálogo lista o substituto.
+
+A verificação lê o que o provider tem. Primeiro ela resolve o estado interno do mediator, que tira a cópia dos registros
+usada pelo catálogo (e o primeiro `Send` não paga por ela), e faz toda conferência sobre essa cópia: registros mudados
+depois disso não mudam o resultado de uma chamada seguinte. Um handler que está na cópia mas não é serviço deste provider
+(adicionado à coleção depois que o provider foi construído) é apontado.
+
+### Catálogo de pedidos
+
+`IRequestCatalog`, resolvido do container, diz o que vai rodar para cada pedido. `Requests` lista os pedidos registrados
+por scan ou `AddRequestHandler`, na ordem de registro, e depois aqueles cujo handler foi registrado diretamente no
+container; `Find(typeof(X))` devolve o de um tipo exato de pedido, ou `null`. Cada `RequestDescriptor` traz o
+`HandlerType` do registro que o container usa (depois de `services.Replace`, o substituto), `Behaviors` (os behaviors do
+pipeline que rodam, do mais externo para dentro, os abertos fechados sobre o pedido) e `SkippedBehaviors` (os behaviors
+abertos cujas restrições genéricas o pedido não satisfaz). Um handler ou behavior registrado por factory aparece como o
+seu tipo de serviço (`IRequestHandler<...>`, `IPipelineBehavior<TRequest, TResponse>`); um registrado por instância, como
+o tipo da instância.
+
+A aplicação pode conferir a sua própria política na partida. Aqui `ICommand` é uma interface marcadora da aplicação, e
+`PermissionBehavior<,>` e `TransactionBehavior<,>` são behaviors abertos restritos a ela; todo comando deve rodar o
+primeiro antes do segundo:
+
+```csharp
+public static class CommandPolicy
+{
+    // Every command runs PermissionBehavior, then TransactionBehavior.
+    public static void Check(IRequestCatalog catalog)
+    {
+        foreach (var request in catalog.Requests.Where(r => typeof(ICommand).IsAssignableFrom(r.RequestType)))
+        {
+            var permission = IndexOf(request, typeof(PermissionBehavior<,>));
+            var transaction = IndexOf(request, typeof(TransactionBehavior<,>));
+            if (permission < 0 || transaction < permission)
+                throw new InvalidOperationException($"{request.RequestType.Name} must run PermissionBehavior before TransactionBehavior.");
+        }
+    }
+
+    private static int IndexOf(RequestDescriptor request, Type openBehavior)
+        => request.Behaviors.ToList().FindIndex(b => b.IsGenericType && b.GetGenericTypeDefinition() == openBehavior);
+}
+```
+
+```csharp
+using var provider = services.BuildServiceProvider();
+CommandPolicy.Check(provider.GetRequiredService<IRequestCatalog>());
+```
+
+Limites: o catálogo é calculado a partir dos registros do `IServiceCollection` com as regras do container padrão, sobre
+uma cópia tirada quando o mediator ou o catálogo é resolvido pela primeira vez (ou por `VerifyHecoleMediator`, o que vier
+antes), então registros posteriores e serviços
+que um container de terceiros registra por meios próprios não aparecem. Registros com chave (keyed) são ignorados. Um
+`IEnumerable<IPipelineBehavior<...>>` registrado como serviço substitui a lista no container, mas não no catálogo
+(`VerifyHecoleMediator` aponta). Os behaviors são calculados na primeira leitura do catálogo; `Send` nunca o usa.
 
 ## Analyzers
 
@@ -294,10 +372,11 @@ O pacote inclui um analyzer Roslyn. Ele não acrescenta dependência em tempo de
 | HM0001 | Tipo de pedido sem handler na compilação | Ligada (Info) |
 | HM0002 | Mais de um handler para o mesmo pedido na compilação | Ligada (Info) |
 | HM1001 | Varredura de assembly | Desligada |
-| HM1002 | `Lifetime = ServiceLifetime.Singleton` | Desligada |
-| HM1003 | Registro de pipeline behavior | Desligada |
-| HM1004 | `TaskWhenAllPublisher` | Desligada |
+| HM1002 | `Lifetime` com qualquer valor além de um `Transient` ou `Scoped` constante | Desligada |
+| HM1003 | Pipeline behaviors fora do projeto de composição (declaração, registro, qualquer `typeof` ou argumento de tipo que nomeie um) | Desligada |
+| HM1004 | `TaskWhenAllPublisher`, também por alias `using` | Desligada |
 | HM1005 | Handler sem `AddRequestHandler` correspondente | Desligada |
+| HM1006 | `IRequestHandler<,>` usado fora da declaração de um handler | Desligada |
 
 As regras `HM1xxx` apontam recursos legítimos que um projeto pode decidir proibir; ligue-as no `.editorconfig`:
 
@@ -305,6 +384,9 @@ As regras `HM1xxx` apontam recursos legítimos que um projeto pode decidir proib
 [*.cs]
 dotnet_diagnostic.HM1001.severity = error
 ```
+
+O analyzer é um aviso antecipado, não um mecanismo de imposição: reflexão por string, um `.editorconfig` aninhado,
+`#pragma` ou `[SuppressMessage]`, e código que nunca é chamado ficam fora do seu alcance.
 
 Detalhes, heurísticas e falsos positivos conhecidos: [docs/analyzers.md](docs/analyzers.md) (em inglês).
 
@@ -317,9 +399,10 @@ Detalhes, heurísticas e falsos positivos conhecidos: [docs/analyzers.md](docs/a
 | Dois handlers para um pedido | Lança no registro, com os dois nomes |
 | `AddHecoleMediator` chamado de novo com outro `Lifetime`, `RequireScope` ou publisher | Lança, com os dois valores |
 | Tipo de behavior ou de publisher inválido | Lança em `AddHecoleMediator` |
-| Pipeline | Behaviors vêm do container na ordem de registro; o handler só é criado quando o pipeline chega nele; `next()` mantém o token do chamador |
+| Pipeline | Behaviors vêm do container na ordem de registro; o handler só é criado quando o pipeline chega nele; `next()` mantém o token que o behavior recebeu |
+| Exceções | Lançadas de forma síncrona só para erros de argumento; todo o resto chega na task devolvida |
 | `TaskWhenAllPublisher`, handler que lança antes de devolver a `Task` | A exceção vai para a `Task` daquele handler; os outros handlers rodam |
-| Notifications | O publisher padrão roda um handler por vez; a mesma classe de handler roda uma vez; despacho pelo tipo real exato |
+| Notifications | O publisher padrão roda um handler por vez; todo handler que o container devolve roda (a biblioteca nunca registra o mesmo handler duas vezes); despacho pelo tipo real exato |
 | Despacho | Um executor tipado é criado no registro; reflection roda uma vez por tipo de pedido para handler registrado só no container |
 | Extras opcionais | `AddRequestHandler`, `AddNotificationHandler`, `RequireScope`, `VerifyHecoleMediator`, `IRequestCatalog`, behaviors prontos, regras do analyzer |
 

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Stopwatch + allocation harness (not BenchmarkDotNet). Run in Release:
+    Stopwatch + allocation harness (not a statistical benchmark harness). Run in Release:
       dotnet run (Release configuration) on benchmarks/Hecole.Mediator.Benchmarks
     Methodology and results: docs/benchmarks.md.
   -->

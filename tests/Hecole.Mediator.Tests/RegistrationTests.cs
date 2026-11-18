@@ -6,6 +6,67 @@ namespace Hecole.Mediator.Tests;
 
 public class RegistrationTests
 {
+    // ---- Handler already registered directly in the container (D12) ----
+
+    [Fact]
+    public async Task HandlerInContainer_ThenAddRequestHandlerWithResponse_OneDescriptor_AndVerifyPasses()
+    {
+        var services = new ServiceCollection();
+        services.AddTransient<IRequestHandler<TestCommand, TestResult>, TestCommandHandler>();
+        services.AddRequestHandler<TestCommand, TestResult, TestCommandHandler>();
+        services.AddHecoleMediator(_ => { });
+
+        Assert.Single(services, d => d.ServiceType == typeof(IRequestHandler<TestCommand, TestResult>));
+
+        using var root = services.BuildServiceProvider();
+        root.VerifyHecoleMediator();
+        using var scope = root.CreateScope();
+        Assert.Equal("Handled: a", (await scope.ServiceProvider.GetRequiredService<ISender>().Send(new TestCommand("a"))).Value);
+    }
+
+    [Fact]
+    public void HandlerInContainer_ThenAddRequestHandlerWithoutResponse_OneDescriptor_AndVerifyPasses()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<Recorder>();
+        services.AddScoped<IRequestHandler<VoidCommand>, VoidCommandHandler>();
+        services.AddRequestHandler<VoidCommand, VoidCommandHandler>();
+        services.AddHecoleMediator(_ => { });
+
+        // The registration already there is kept as it is, lifetime included.
+        Assert.Equal(ServiceLifetime.Scoped, Assert.Single(services, d => d.ServiceType == typeof(IRequestHandler<VoidCommand>)).Lifetime);
+
+        using var root = services.BuildServiceProvider();
+        root.VerifyHecoleMediator();
+    }
+
+    [Fact]
+    public void HandlerInContainerAsFactory_ThenAddRequestHandler_BothKept_AndVerifyReportsTwoHandlers()
+    {
+        // A factory registration has no implementation type to compare with: it is not the same registration.
+        var services = new ServiceCollection();
+        services.AddTransient<IRequestHandler<TestCommand, TestResult>>(_ => new TestCommandHandler());
+        services.AddRequestHandler<TestCommand, TestResult, TestCommandHandler>();
+        services.AddHecoleMediator(_ => { });
+
+        Assert.Equal(2, services.Count(d => d.ServiceType == typeof(IRequestHandler<TestCommand, TestResult>)));
+        using var root = services.BuildServiceProvider();
+        Assert.Throws<MediatorConfigurationException>(() => root.VerifyHecoleMediator());
+    }
+
+    [Fact]
+    public void HandlerInContainer_ThenScan_OneDescriptor_AndVerifyPasses()
+    {
+        var services = new ServiceCollection();
+        services.AddTransient<IRequestHandler<Hecole.Mediator.Tests.ScanTarget.ScanQuery, string>, Hecole.Mediator.Tests.ScanTarget.ScanQueryHandler>();
+        services.AddHecoleMediator(cfg => cfg.RegisterServicesFromAssemblyContaining<Hecole.Mediator.Tests.ScanTarget.ScanQuery>());
+
+        Assert.Single(services, d => d.ServiceType == typeof(IRequestHandler<Hecole.Mediator.Tests.ScanTarget.ScanQuery, string>));
+
+        using var root = services.AddSingleton<Hecole.Mediator.Tests.ScanTarget.ScanRecorder>().BuildServiceProvider();
+        root.VerifyHecoleMediator();
+    }
+
     [Fact]
     public void AddHecoleMediator_DefaultLifetime_IsTransientForMediatorSenderAndPublisher()
     {
@@ -161,6 +222,132 @@ public class RegistrationTests
 
         using var other = host.Root.CreateScope();
         Assert.Same(host.GetRequiredService<MediatorRuntime>().Catalog, other.ServiceProvider.GetRequiredService<MediatorRuntime>().Catalog);
+    }
+
+    // ---- 2.0.1: registrations that could never be dispatched ---------------------------------------------------------
+
+    [Fact]
+    public void AddRequestHandler_WidenedResponse_ThrowsNamingRequestResponsesAndHandler()
+    {
+        var services = new ServiceCollection();
+
+        // Compiles because IRequest<out TResponse> is covariant: WidenedQuery is an IRequest<object>.
+        var ex = Assert.Throws<ArgumentException>(() => services.AddRequestHandler<WidenedQuery, object, WidenedQueryHandler>());
+
+        Assert.Contains(typeof(WidenedQuery).FullName!, ex.Message);
+        Assert.Contains(typeof(WidenedQueryHandler).FullName!, ex.Message);
+        Assert.Contains("'System.String'", ex.Message);
+        Assert.Contains("'System.Object'", ex.Message);
+        Assert.DoesNotContain(services, d => d.ServiceType == typeof(IRequestHandler<WidenedQuery, object>));
+        Assert.Empty(HandlerRegistry.GetOrAdd(services).Registrations);
+    }
+
+    [Fact]
+    public void AddRequestHandler_InterfaceRequest_Throws()
+    {
+        var services = new ServiceCollection();
+
+        var withResponse = Assert.Throws<ArgumentException>(() => services.AddRequestHandler<IQueryContract, string, InterfaceQueryHandler>());
+        var withoutResponse = Assert.Throws<ArgumentException>(() => services.AddRequestHandler<ICommandContract, InterfaceCommandHandler>());
+
+        Assert.Contains(typeof(IQueryContract).FullName!, withResponse.Message);
+        Assert.Contains("an interface", withResponse.Message);
+        Assert.Contains(typeof(ICommandContract).FullName!, withoutResponse.Message);
+        Assert.Equal([typeof(HandlerRegistry)], services.Select(d => d.ServiceType));
+        Assert.Empty(HandlerRegistry.GetOrAdd(services).Registrations);
+    }
+
+    [Fact]
+    public void AddRequestHandler_AbstractRequest_Throws()
+    {
+        var services = new ServiceCollection();
+
+        var withResponse = Assert.Throws<ArgumentException>(() => services.AddRequestHandler<AbstractQuery, string, AbstractQueryHandler>());
+        var withoutResponse = Assert.Throws<ArgumentException>(() => services.AddRequestHandler<AbstractCommand, AbstractCommandHandler>());
+
+        Assert.Contains(typeof(AbstractQuery).FullName!, withResponse.Message);
+        Assert.Contains("an abstract class", withResponse.Message);
+        Assert.Contains(typeof(AbstractCommand).FullName!, withoutResponse.Message);
+    }
+
+    [Fact]
+    public void AddRequestHandler_ExactResponseOfRequestOfUnit_IsAccepted()
+    {
+        var services = new ServiceCollection();
+        services.AddRequestHandler<UnitQuery, Unit, UnitQueryHandler>();
+
+        Assert.Single(services, d => d.ServiceType == typeof(IRequestHandler<UnitQuery, Unit>));
+    }
+
+    [Fact]
+    public void Scan_WidenedResponseHandler_Throws()
+    {
+        var assembly = EmittedHandlerAssembly.WithHandler(typeof(IRequestHandler<WidenedQuery, object>), "ScannedWidenedHandler");
+        var services = new ServiceCollection();
+
+        var ex = Assert.Throws<ArgumentException>(() => services.AddHecoleMediator(cfg => cfg.RegisterServicesFromAssembly(assembly)));
+
+        Assert.Contains(typeof(WidenedQuery).FullName!, ex.Message);
+        Assert.Contains("ScannedWidenedHandler", ex.Message);
+        Assert.Contains("'System.Object'", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(typeof(IRequestHandler<IQueryContract, string>), "an interface")]
+    [InlineData(typeof(IRequestHandler<ICommandContract>), "an interface")]
+    [InlineData(typeof(IRequestHandler<AbstractQuery, string>), "an abstract class")]
+    [InlineData(typeof(IRequestHandler<AbstractCommand>), "an abstract class")]
+    public void Scan_HandlerOfRequestThatCanNeverBeSent_Throws(Type handlerInterface, string reason)
+    {
+        var assembly = EmittedHandlerAssembly.WithHandler(handlerInterface);
+        var services = new ServiceCollection();
+
+        var ex = Assert.Throws<ArgumentException>(() => services.AddHecoleMediator(cfg => cfg.RegisterServicesFromAssembly(assembly)));
+
+        Assert.Contains(handlerInterface.GetGenericArguments()[0].FullName!, ex.Message);
+        Assert.Contains(reason, ex.Message);
+    }
+
+    public sealed record WidenedQuery : IRequest<string>;
+
+    public sealed class WidenedQueryHandler : IRequestHandler<WidenedQuery, object>
+    {
+        public Task<object> Handle(WidenedQuery request, CancellationToken cancellationToken) => Task.FromResult<object>("x");
+    }
+
+    public interface IQueryContract : IRequest<string>;
+
+    public interface ICommandContract : IRequest;
+
+    public sealed class InterfaceQueryHandler : IRequestHandler<IQueryContract, string>
+    {
+        public Task<string> Handle(IQueryContract request, CancellationToken cancellationToken) => Task.FromResult("x");
+    }
+
+    public sealed class InterfaceCommandHandler : IRequestHandler<ICommandContract>
+    {
+        public Task Handle(ICommandContract request, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    public abstract record AbstractQuery : IRequest<string>;
+
+    public abstract record AbstractCommand : IRequest;
+
+    public sealed class AbstractQueryHandler : IRequestHandler<AbstractQuery, string>
+    {
+        public Task<string> Handle(AbstractQuery request, CancellationToken cancellationToken) => Task.FromResult("x");
+    }
+
+    public sealed class AbstractCommandHandler : IRequestHandler<AbstractCommand>
+    {
+        public Task Handle(AbstractCommand request, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    public sealed record UnitQuery : IRequest<Unit>;
+
+    public sealed class UnitQueryHandler : IRequestHandler<UnitQuery, Unit>
+    {
+        public Task<Unit> Handle(UnitQuery request, CancellationToken cancellationToken) => Unit.Task;
     }
 
     private sealed class OtherVoidCommandHandler : IRequestHandler<VoidCommand>

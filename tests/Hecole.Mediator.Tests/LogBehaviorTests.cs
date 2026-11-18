@@ -12,6 +12,9 @@ public class LogBehaviorTests
 
     public sealed class BoomException(string message) : Exception(message);
 
+    // Namespace-qualified, nested type joined with '.'.
+    private const string LoginCommandName = "Hecole.Mediator.Tests.LogBehaviorTests.LoginCommand";
+
     private const string Secret = "s3cr3t-P4ssw0rd-value";
 
     private static RequestHandlerDelegate<string> Returning(string value) => _ => Task.FromResult(value);
@@ -48,7 +51,7 @@ public class LogBehaviorTests
         Assert.Equal([1001, 1002], entries.Select(e => e.EventId.Id));
         Assert.Equal(["RequestStarting", "RequestFinished"], entries.Select(e => e.EventId.Name));
         Assert.All(entries, e => Assert.Equal(LogLevel.Information, e.Level));
-        Assert.All(entries, e => Assert.Contains("LoginCommand", e.Message, StringComparison.Ordinal));
+        Assert.All(entries, e => Assert.Contains(LoginCommandName,e.Message, StringComparison.Ordinal));
         Assert.All(entries, e => Assert.Null(e.Exception));
         var elapsed = Assert.IsType<double>(entries[1].Values.Single(v => v.Key == "ElapsedMilliseconds").Value);
         Assert.True(elapsed >= 0);
@@ -145,7 +148,7 @@ public class LogBehaviorTests
         Assert.Equal(new EventId(2001, "SlowRequest"), entry.EventId);
         Assert.Equal(500d, entry.Values.Single(v => v.Key == "ThresholdMilliseconds").Value);
         Assert.True((double)entry.Values.Single(v => v.Key == "ElapsedMilliseconds").Value! > 500);
-        Assert.Contains("LoginCommand", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(LoginCommandName,entry.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -252,8 +255,30 @@ public class LogBehaviorTests
         Assert.Equal(LogLevel.Error, entry.Level);
         Assert.Equal(new EventId(3001, "UnhandledException"), entry.EventId);
         Assert.Same(thrown, entry.Exception);
-        Assert.Contains("LoginCommand", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(LoginCommandName,entry.Message, StringComparison.Ordinal);
         Assert.Contains(nameof(ThrowFromDeepInside), thrown.StackTrace, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Unhandled_ValidationException_LogsWarningWithNameAndCountOnly_AndRethrowsSameException()
+    {
+        var logger = new FakeLogger<UnhandledExceptionBehavior<LoginCommand, string>>();
+        var behavior = new UnhandledExceptionBehavior<LoginCommand, string>(logger);
+        var validation = new ValidationBehavior<LoginCommand, string>(new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider());
+        var request = new LoginCommand(null);
+
+        var thrown = await Assert.ThrowsAsync<RequestValidationException>(() =>
+            behavior.Handle(request, _ => validation.Handle(request, Returning("never"), default), default));
+
+        var entry = Assert.Single(logger.Sink.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Equal(new EventId(3003, "RequestValidationFailed"), entry.EventId);
+        Assert.Null(entry.Exception);
+        Assert.Equal($"{LoginCommandName} failed validation with 1 error(s)", entry.Message);
+        Assert.Equal(
+            new KeyValuePair<string, object?>[] { new("RequestName", LoginCommandName), new("ErrorCount", 1) },
+            entry.Values.Where(v => v.Key != "{OriginalFormat}"));
+        Assert.DoesNotContain(thrown.Errors[0].ErrorMessage!, entry.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -284,9 +309,75 @@ public class LogBehaviorTests
         Assert.Same(thrown, entry.Exception);
     }
 
+    // ---------- Request name ----------
+
+    public static class Classrooms
+    {
+        public sealed record Command : IRequest<string>;
+    }
+
+    public static class Students
+    {
+        public sealed record Command : IRequest<string>;
+    }
+
+    public sealed record Paged<T>(int Page) : IRequest<string>;
+
+    public sealed class Outer<T>
+    {
+        public sealed class Inner<TOther>;
+    }
+
+    [Theory]
+    [InlineData(typeof(Classrooms.Command), "Hecole.Mediator.Tests.LogBehaviorTests.Classrooms.Command")]
+    [InlineData(typeof(Paged<LoginCommand>), "Hecole.Mediator.Tests.LogBehaviorTests.Paged<Hecole.Mediator.Tests.LogBehaviorTests.LoginCommand>")]
+    [InlineData(typeof(Paged<Paged<int>>), "Hecole.Mediator.Tests.LogBehaviorTests.Paged<Hecole.Mediator.Tests.LogBehaviorTests.Paged<System.Int32>>")]
+    [InlineData(typeof(Outer<string>.Inner<int>), "Hecole.Mediator.Tests.LogBehaviorTests.Outer<System.String>.Inner<System.Int32>")]
+    [InlineData(typeof(Dictionary<string, int[]>), "System.Collections.Generic.Dictionary<System.String, System.Int32[]>")]
+    [InlineData(typeof(int[,]), "System.Int32[,]")]
+    [InlineData(typeof(TestCommand), "Hecole.Mediator.Tests.Fakes.TestCommand")]
+    public void RequestName_IsNamespaceQualified_NestedWithDots_GenericArgumentsFormattedRecursively(Type type, string expected)
+        => Assert.Equal(expected, TypeNames.Format(type));
+
+    [Fact]
+    public async Task Logging_TwoRequestsWithTheSameSimpleName_LogDifferentNames()
+    {
+        var classrooms = new FakeLogger<LoggingBehavior<Classrooms.Command, string>>();
+        var students = new FakeLogger<LoggingBehavior<Students.Command, string>>();
+
+        await new LoggingBehavior<Classrooms.Command, string>(classrooms).Handle(new Classrooms.Command(), Returning("ok"), default);
+        await new LoggingBehavior<Students.Command, string>(students).Handle(new Students.Command(), Returning("ok"), default);
+
+        Assert.Equal("Handling Hecole.Mediator.Tests.LogBehaviorTests.Classrooms.Command", classrooms.Sink.Entries[0].Message);
+        Assert.Equal("Handling Hecole.Mediator.Tests.LogBehaviorTests.Students.Command", students.Sink.Entries[0].Message);
+    }
+
+    [Fact]
+    public async Task EveryBehavior_GenericRequest_LogsTheReadableName()
+    {
+        const string name = "Hecole.Mediator.Tests.LogBehaviorTests.Paged<Hecole.Mediator.Tests.LogBehaviorTests.LoginCommand>";
+        var request = new Paged<LoginCommand>(1);
+        RequestHandlerDelegate<string> slow = async _ =>
+        {
+            await Task.Delay(5);
+            throw new BoomException("failed");
+        };
+        var logging = new FakeLogger<LoggingBehavior<Paged<LoginCommand>, string>>();
+        var performance = new FakeLogger<PerformanceBehavior<Paged<LoginCommand>, string>>();
+        var unhandled = new FakeLogger<UnhandledExceptionBehavior<Paged<LoginCommand>, string>>();
+
+        await Assert.ThrowsAsync<BoomException>(() => new LoggingBehavior<Paged<LoginCommand>, string>(logging).Handle(request, slow, default));
+        await Assert.ThrowsAsync<BoomException>(() => new PerformanceBehavior<Paged<LoginCommand>, string>(performance, new PerformanceBehaviorOptions { Threshold = TimeSpan.Zero }).Handle(request, slow, default));
+        await Assert.ThrowsAsync<BoomException>(() => new UnhandledExceptionBehavior<Paged<LoginCommand>, string>(unhandled).Handle(request, slow, default));
+
+        var entries = logging.Sink.Entries.Concat(performance.Sink.Entries).Concat(unhandled.Sink.Entries).ToList();
+        Assert.Equal(4, entries.Count);
+        Assert.All(entries, e => Assert.Equal(name, e.Values.Single(v => v.Key == "RequestName").Value));
+    }
+
     // ---------- All four in the pipeline ----------
 
-    public sealed record SecretCommand([property: Required, MinLength(3)] string? Password, bool Fail = false) : IRequest<string>;
+    public sealed record SecretCommand([property: Required, MinLength(3)] string? Password, bool Fail = false, [property: MaxLength(4)] string? Pin = null) : IRequest<string>;
 
     public sealed record SecretVoidCommand([property: Required] string? Password) : IRequest;
 
@@ -343,8 +434,16 @@ public class LogBehaviorTests
         Assert.Single(ex.Errors);
         Assert.Empty(host.GetRequiredService<Recorder>().Entries);
         var entries = host.GetRequiredService<LogSink>().Entries;
-        Assert.Equal([1001, 2001, 3001, 1003], entries.Select(e => e.EventId.Id));
-        Assert.Same(ex, entries.Single(e => e.EventId.Id == 3001).Exception);
+        Assert.Equal([1001, 2001, 3003, 1003], entries.Select(e => e.EventId.Id));
+        var validation = entries.Single(e => e.EventId.Id == 3003);
+        Assert.Equal(LogLevel.Warning, validation.Level);
+        Assert.Null(validation.Exception);
+        Assert.DoesNotContain(entries, e => e.Exception is not null);
+        foreach (var entry in entries)
+        {
+            Assert.DoesNotContain(ex.Errors[0].ErrorMessage!, entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(entry.Values, v => Convert.ToString(v.Value, System.Globalization.CultureInfo.InvariantCulture)!.Contains(ex.Errors[0].ErrorMessage!, StringComparison.Ordinal));
+        }
     }
 
     [Fact]
@@ -368,6 +467,9 @@ public class LogBehaviorTests
         await Assert.ThrowsAsync<BoomException>(() => host.Mediator.Send(new SecretCommand(Secret, Fail: true)));
         await Assert.ThrowsAsync<RequestValidationException>(() => host.Mediator.Send(new SecretCommand("s3")));
         await Assert.ThrowsAsync<RequestValidationException>(() => host.Mediator.Send(new SecretVoidCommand(null)));
+        // An invalid request whose invalid value is the secret itself.
+        var invalidSecret = await Assert.ThrowsAsync<RequestValidationException>(() => host.Mediator.Send(new SecretCommand("valid", Pin: Secret)));
+        Assert.Equal([nameof(SecretCommand.Pin)], invalidSecret.Errors[0].MemberNames);
 
         var entries = host.GetRequiredService<LogSink>().Entries;
         Assert.NotEmpty(entries);

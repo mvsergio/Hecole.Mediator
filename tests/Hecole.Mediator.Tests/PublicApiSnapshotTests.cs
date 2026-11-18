@@ -41,6 +41,7 @@ public class PublicApiSnapshotTests
         interface Hecole.Mediator.IRequest : Hecole.Mediator.IBaseRequest
         interface Hecole.Mediator.IRequest<out TResponse> : Hecole.Mediator.IBaseRequest
         interface Hecole.Mediator.IRequestCatalog
+          method Hecole.Mediator.RequestDescriptor? Find(System.Type requestType)
           property System.Collections.Generic.IReadOnlyList<Hecole.Mediator.RequestDescriptor> Requests { get; }
         interface Hecole.Mediator.IRequestHandler<in TRequest> where TRequest : Hecole.Mediator.IRequest
           method System.Threading.Tasks.Task Handle(TRequest request, System.Threading.CancellationToken cancellationToken)
@@ -72,6 +73,8 @@ public class PublicApiSnapshotTests
           method static bool op_Equality(Hecole.Mediator.RequestDescriptor? left, Hecole.Mediator.RequestDescriptor? right)
           method static bool op_Inequality(Hecole.Mediator.RequestDescriptor? left, Hecole.Mediator.RequestDescriptor? right)
           method void Deconstruct(out System.Type RequestType, out System.Type ResponseType, out System.Type HandlerType)
+          property System.Collections.Generic.IReadOnlyList<System.Type> Behaviors { get; init; }
+          property System.Collections.Generic.IReadOnlyList<System.Type> SkippedBehaviors { get; init; }
           property System.Type HandlerType { get; init; }
           property System.Type RequestType { get; init; }
           property System.Type ResponseType { get; init; }

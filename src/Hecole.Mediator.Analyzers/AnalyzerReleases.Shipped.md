@@ -14,3 +14,11 @@ HM1002 | Hecole.Mediator.Restriction | Disabled | RestrictedUsageAnalyzer, Singl
 HM1003 | Hecole.Mediator.Restriction | Disabled | RestrictedUsageAnalyzer, pipeline behavior registration
 HM1004 | Hecole.Mediator.Restriction | Disabled | RestrictedUsageAnalyzer, TaskWhenAllPublisher
 HM1005 | Hecole.Mediator.Restriction | Disabled | ExplicitRegistrationAnalyzer, request handler without AddRequestHandler
+
+## Release 2.0.1
+
+### New Rules
+
+Rule ID | Category | Severity | Notes
+--------|----------|----------|-------
+HM1006 | Hecole.Mediator.Restriction | Disabled | HandlerReferenceAnalyzer, request handler interface used outside a handler declaration

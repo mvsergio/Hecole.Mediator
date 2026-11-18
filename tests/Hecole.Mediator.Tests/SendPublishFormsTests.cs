@@ -34,18 +34,19 @@ public class SendPublishFormsTests
     [Fact]
     public async Task SendWithResponse_RunsBehaviorsAndPassesToken()
     {
-        var log = new List<string>();
+        using var cts = new CancellationTokenSource();
+        var seen = new List<CancellationToken>();
         using var provider = BuildProvider(s =>
         {
-            s.AddRequestHandler<TestCommand, TestResult, TestCommandHandler>();
-            s.AddTransient<IPipelineBehavior<TestCommand, TestResult>>(
-                _ => new TrackingBehavior<TestCommand, TestResult>(log, "B"));
+            s.AddRequestHandler<TokenQuery, CancellationToken, TokenQueryHandler>();
+            s.AddTransient<IPipelineBehavior<TokenQuery, CancellationToken>>(_ => new TokenRecordingBehavior(seen));
         });
         var mediator = provider.GetRequiredService<IMediator>();
 
-        await mediator.Send(new TestCommand("a"));
+        var handlerToken = await mediator.Send(new TokenQuery(), cts.Token);
 
-        Assert.Equal(["B:before", "B:after"], log);
+        Assert.Equal(cts.Token, Assert.Single(seen));
+        Assert.Equal(cts.Token, handlerToken);
     }
 
     // Send<TRequest>(TRequest) where TRequest : IRequest
@@ -208,6 +209,15 @@ public class SendPublishFormsTests
         Assert.Equal("()", Unit.Value.ToString());
         Assert.True(Unit.Value == default);
         Assert.Equal(0, Unit.Value.CompareTo(default));
+    }
+
+    private sealed class TokenRecordingBehavior(List<CancellationToken> seen) : IPipelineBehavior<TokenQuery, CancellationToken>
+    {
+        public Task<CancellationToken> Handle(TokenQuery request, RequestHandlerDelegate<CancellationToken> next, CancellationToken cancellationToken)
+        {
+            seen.Add(cancellationToken);
+            return next();
+        }
     }
 
     private sealed class UnitTrackingBehavior(List<string> log) : IPipelineBehavior<VoidCommand, Unit>

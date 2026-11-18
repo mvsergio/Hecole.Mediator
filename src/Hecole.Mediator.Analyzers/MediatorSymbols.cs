@@ -4,11 +4,15 @@ using Microsoft.CodeAnalysis;
 namespace Hecole.Mediator.Analyzers;
 
 /// <summary>
-/// Hecole.Mediator symbols resolved by metadata name, once per compilation. <see cref="TryCreate"/> returns
-/// <see langword="null"/> when the compilation does not reference Hecole.Mediator; analyzers then register nothing.
+/// Hecole.Mediator symbols resolved by metadata name, once per compilation, from the assembly named
+/// <c>Hecole.Mediator</c> only: another referenced assembly declaring a type with the same full name neither hides nor
+/// replaces them. <see cref="TryCreate"/> returns <see langword="null"/> when the compilation does not reference
+/// Hecole.Mediator; analyzers then register nothing.
 /// </summary>
 internal sealed class MediatorSymbols
 {
+    private const string AssemblyName = "Hecole.Mediator";
+
     private MediatorSymbols(Compilation compilation, INamedTypeSymbol request, INamedTypeSymbol requestOfT,
         INamedTypeSymbol handlerOfRequest, INamedTypeSymbol handlerOfRequestAndResponse)
     {
@@ -16,12 +20,10 @@ internal sealed class MediatorSymbols
         RequestOfT = requestOfT;
         VoidHandler = handlerOfRequest;
         Handler = handlerOfRequestAndResponse;
-        PipelineBehavior = compilation.GetTypeByMetadataName("Hecole.Mediator.IPipelineBehavior`2");
-        Configuration = compilation.GetTypeByMetadataName("Hecole.Mediator.HecoleMediatorConfiguration");
-        Extensions = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.HecoleMediatorServiceCollectionExtensions");
-        TaskWhenAllPublisher = compilation.GetTypeByMetadataName("Hecole.Mediator.NotificationPublishers.TaskWhenAllPublisher");
-        ServiceCollection = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.IServiceCollection");
-        ServiceDescriptor = compilation.GetTypeByMetadataName("Microsoft.Extensions.DependencyInjection.ServiceDescriptor");
+        PipelineBehavior = Resolve(compilation, "Hecole.Mediator.IPipelineBehavior`2");
+        Configuration = Resolve(compilation, "Hecole.Mediator.HecoleMediatorConfiguration");
+        Extensions = Resolve(compilation, "Microsoft.Extensions.DependencyInjection.HecoleMediatorServiceCollectionExtensions");
+        TaskWhenAllPublisher = Resolve(compilation, "Hecole.Mediator.NotificationPublishers.TaskWhenAllPublisher");
     }
 
     /// <summary><c>IRequest</c> (no response).</summary>
@@ -44,16 +46,12 @@ internal sealed class MediatorSymbols
 
     public INamedTypeSymbol? TaskWhenAllPublisher { get; }
 
-    public INamedTypeSymbol? ServiceCollection { get; }
-
-    public INamedTypeSymbol? ServiceDescriptor { get; }
-
     public static MediatorSymbols? TryCreate(Compilation compilation)
     {
-        var request = compilation.GetTypeByMetadataName("Hecole.Mediator.IRequest");
-        var requestOfT = compilation.GetTypeByMetadataName("Hecole.Mediator.IRequest`1");
-        var voidHandler = compilation.GetTypeByMetadataName("Hecole.Mediator.IRequestHandler`1");
-        var handler = compilation.GetTypeByMetadataName("Hecole.Mediator.IRequestHandler`2");
+        var request = Resolve(compilation, "Hecole.Mediator.IRequest");
+        var requestOfT = Resolve(compilation, "Hecole.Mediator.IRequest`1");
+        var voidHandler = Resolve(compilation, "Hecole.Mediator.IRequestHandler`1");
+        var handler = Resolve(compilation, "Hecole.Mediator.IRequestHandler`2");
 
         if (request is null || requestOfT is null || voidHandler is null || handler is null)
         {
@@ -61,6 +59,27 @@ internal sealed class MediatorSymbols
         }
 
         return new MediatorSymbols(compilation, request, requestOfT, voidHandler, handler);
+    }
+
+    /// <summary>True when <paramref name="type"/> is the handler interface definition, with or without response.</summary>
+    public bool IsHandlerDefinition(INamedTypeSymbol type)
+        => SymbolEqualityComparer.Default.Equals(type.OriginalDefinition, Handler)
+           || SymbolEqualityComparer.Default.Equals(type.OriginalDefinition, VoidHandler);
+
+    // GetTypeByMetadataName returns null when two referenced assemblies declare the same full name, which would disable
+    // every analyzer; the type is taken from the Hecole.Mediator assembly instead (the compilation itself when it is the
+    // library being built).
+    private static INamedTypeSymbol? Resolve(Compilation compilation, string metadataName)
+    {
+        foreach (var candidate in compilation.GetTypesByMetadataName(metadataName))
+        {
+            if (candidate.ContainingAssembly?.Name == AssemblyName)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -130,12 +149,19 @@ internal sealed class MediatorSymbols
         => SymbolEqualityComparer.Default.Equals(handlerInterface.OriginalDefinition, Handler);
 
     /// <summary>
-    /// Decorator: some constructor of <paramref name="type"/> takes the same handler interface it implements.
+    /// Decorator: some public constructor of <paramref name="type"/> takes the same handler interface it implements.
+    /// Only public constructors count, as the container builds the class with one of them; a non-public constructor
+    /// taking the interface does not make a plain handler a decorator.
     /// </summary>
     public static bool IsDecoratorOf(INamedTypeSymbol type, INamedTypeSymbol handlerInterface)
     {
         foreach (var constructor in type.InstanceConstructors)
         {
+            if (constructor.DeclaredAccessibility != Accessibility.Public)
+            {
+                continue;
+            }
+
             foreach (var parameter in constructor.Parameters)
             {
                 if (SymbolEqualityComparer.Default.Equals(parameter.Type, handlerInterface))

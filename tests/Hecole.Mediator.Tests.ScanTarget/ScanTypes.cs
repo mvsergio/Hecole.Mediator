@@ -65,6 +65,9 @@ public abstract class AbstractScanSkippedHandler : IRequestHandler<ScanSkippedQu
 
 public sealed record GenericScanQuery<T>() : IRequest<string>;
 
+// Abstract request without handler: never the runtime type of a request, so VerifyHecoleMediator(assembly) skips it.
+public abstract record AbstractScanQuery : IRequest<string>;
+
 public sealed class OpenGenericScanHandler<T> : IRequestHandler<GenericScanQuery<T>, string>
 {
     public Task<string> Handle(GenericScanQuery<T> request, CancellationToken cancellationToken) => Task.FromResult(typeof(T).Name);

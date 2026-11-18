@@ -125,9 +125,12 @@ public sealed class RequestWithoutHandlerTests
         Assert.Empty(await AnalyzeAsync(handlers));
     }
 
-    // False positive 2: open generic handler registered as IRequestHandler<,> in the container.
+    // An open generic handler class covers no request: scanning skips it, the container cannot close a one-parameter class
+    // for IRequestHandler<,>, and the mediator does not support open generic handlers (VerifyHecoleMediator reports them).
+    // It still marks the compilation as one that declares handlers. (Until 2.0.0 it silenced HM0001 for every request of
+    // its shape.)
     [Fact]
-    public async Task OpenGenericHandler_CoversRequestsOfItsShape()
+    public async Task OpenGenericHandler_DoesNotCoverRequests()
     {
         var diagnostics = await AnalyzeAsync("""
             public sealed record Query : IRequest<string>;
@@ -138,12 +141,11 @@ public sealed class RequestWithoutHandlerTests
             }
             """);
 
-        // The open handler has a response: it covers Query, not the void Command.
-        Assert.Equal("Command", Assert.Single(diagnostics.WithId(Id)).Text());
+        Assert.Equal(["Query", "Command"], diagnostics.WithId(Id).Select(diagnostic => diagnostic.Text()));
     }
 
     [Fact]
-    public async Task OpenGenericVoidHandler_CoversVoidRequests()
+    public async Task OpenGenericVoidHandler_DoesNotCoverVoidRequests()
     {
         var diagnostics = await AnalyzeAsync("""
             public sealed record Command : IRequest;
@@ -153,7 +155,41 @@ public sealed class RequestWithoutHandlerTests
             }
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.Equal("Command", Assert.Single(diagnostics.WithId(Id)).Text());
+    }
+
+    // The way an open generic handler class can serve a request: a closed construction registered with AddRequestHandler.
+    // An AddRequestHandler call for the request covers it, directly or through a generic helper.
+    [Fact]
+    public async Task RequestRegisteredWithAddRequestHandler_IsCovered()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            public sealed record Query : IRequest<string>;
+            public sealed record Command : IRequest;
+            public sealed class GenericHandler<TRequest> : IRequestHandler<TRequest, string> where TRequest : IRequest<string>
+            {
+                public Task<string> Handle(TRequest request, CancellationToken cancellationToken) => Task.FromResult("");
+            }
+            public sealed class GenericVoidHandler<TRequest> : IRequestHandler<TRequest> where TRequest : IRequest
+            {
+                public Task Handle(TRequest request, CancellationToken cancellationToken) => Task.CompletedTask;
+            }
+            public static class Composition
+            {
+                private static IServiceCollection Void<TRequest, THandler>(this IServiceCollection services)
+                    where TRequest : IRequest
+                    where THandler : class, IRequestHandler<TRequest>
+                    => services.AddRequestHandler<TRequest, THandler>();
+
+                public static void Configure(IServiceCollection services)
+                {
+                    services.AddRequestHandler<Query, string, GenericHandler<Query>>();
+                    services.Void<Command, GenericVoidHandler<Command>>();
+                }
+            }
+            """);
+
+        Assert.Empty(diagnostics.WithId(Id));
     }
 
     // False positive 3: types that are never sent as such.
@@ -193,14 +229,34 @@ public sealed class RequestWithoutHandlerTests
         Assert.Empty(diagnostics);
     }
 
+    // An abstract handler class cannot be registered, so it handles nothing by itself (until 2.0.0 it counted). It still
+    // marks the compilation as one that declares handlers.
     [Fact]
-    public async Task AbstractClosedHandler_Counts()
+    public async Task AbstractClosedHandler_DoesNotCount()
     {
         var diagnostics = await AnalyzeAsync("""
             public sealed record Query : IRequest<int>;
             public abstract class QueryHandlerBase : IRequestHandler<Query, int>
             {
                 public abstract Task<int> Handle(Query request, CancellationToken cancellationToken);
+            }
+            """);
+
+        Assert.Equal("Query", Assert.Single(diagnostics.WithId(Id)).Text());
+    }
+
+    [Fact]
+    public async Task AbstractHandlerWithConcreteSubclass_Counts()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            public sealed record Query : IRequest<int>;
+            public abstract class QueryHandlerBase : IRequestHandler<Query, int>
+            {
+                public abstract Task<int> Handle(Query request, CancellationToken cancellationToken);
+            }
+            public sealed class QueryHandler : QueryHandlerBase
+            {
+                public override Task<int> Handle(Query request, CancellationToken cancellationToken) => Task.FromResult(1);
             }
             """);
 

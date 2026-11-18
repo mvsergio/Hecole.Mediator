@@ -94,3 +94,44 @@ public sealed class CustomersEndpoint(ISender sender)
         }
     }
 }
+
+public interface ICommand;
+
+public sealed record ShipOrder(Guid OrderId) : IRequest, ICommand;
+
+public sealed class ShipOrderHandler : IRequestHandler<ShipOrder>
+{
+    public Task Handle(ShipOrder request, CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+public sealed class PermissionBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : ICommand
+{
+    public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
+        => next(); // Check the caller's permission.
+}
+
+public sealed class TransactionBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : ICommand
+{
+    public Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
+        => next(); // Run inside a transaction.
+}
+
+public static class CommandPolicy
+{
+    // Every command runs PermissionBehavior, then TransactionBehavior.
+    public static void Check(IRequestCatalog catalog)
+    {
+        foreach (var request in catalog.Requests.Where(r => typeof(ICommand).IsAssignableFrom(r.RequestType)))
+        {
+            var permission = IndexOf(request, typeof(PermissionBehavior<,>));
+            var transaction = IndexOf(request, typeof(TransactionBehavior<,>));
+            if (permission < 0 || transaction < permission)
+                throw new InvalidOperationException($"{request.RequestType.Name} must run PermissionBehavior before TransactionBehavior.");
+        }
+    }
+
+    private static int IndexOf(RequestDescriptor request, Type openBehavior)
+        => request.Behaviors.ToList().FindIndex(b => b.IsGenericType && b.GetGenericTypeDefinition() == openBehavior);
+}

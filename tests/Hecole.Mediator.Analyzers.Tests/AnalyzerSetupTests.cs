@@ -23,6 +23,7 @@ public sealed class AnalyzerSetupTests
                 "HM1003 Hecole.Mediator.Restriction Warning off",
                 "HM1004 Hecole.Mediator.Restriction Warning off",
                 "HM1005 Hecole.Mediator.Restriction Warning off",
+                "HM1006 Hecole.Mediator.Restriction Warning off",
             ],
             descriptors);
     }
@@ -75,11 +76,52 @@ public sealed class AnalyzerSetupTests
             public static class Use { public static object Make() => new TaskWhenAllPublisher(); }
             """],
             referenceMediator: false,
-            options: new[] { "HM0001", "HM0002", "HM1001", "HM1002", "HM1003", "HM1004", "HM1005" }
+            options: new[] { "HM0001", "HM0002", "HM1001", "HM1002", "HM1003", "HM1004", "HM1005", "HM1006" }
                 .ToDictionary(id => id, _ => ReportDiagnostic.Error));
 
         Assert.DoesNotContain(compilation.References, reference => reference.Display?.EndsWith("Hecole.Mediator.dll", StringComparison.OrdinalIgnoreCase) == true);
         Assert.Empty(await AnalyzeAsync(compilation));
+    }
+
+    // Another referenced assembly declaring Hecole.Mediator.IRequest made GetTypeByMetadataName return null, which silently
+    // disabled every analyzer. Symbols are taken from the Hecole.Mediator assembly.
+    [Fact]
+    public async Task SameFullNameInAnotherAssembly_DoesNotDisableTheAnalyzers()
+    {
+        var lookalike = Compile(
+            "Lookalike",
+            ["""
+            namespace Hecole.Mediator
+            {
+                public interface IRequest;
+                public sealed class HecoleMediatorConfiguration;
+            }
+            """],
+            referenceMediator: false);
+
+        var compilation = Compile(
+            "Sample",
+            ["""
+            public sealed record Handled : IRequest<int>;
+            public sealed record Orphan : IRequest<int>;
+            public sealed class HandledHandler : IRequestHandler<Handled, int>
+            {
+                public Task<int> Handle(Handled request, CancellationToken cancellationToken) => Task.FromResult(1);
+            }
+            public static class Composition
+            {
+                public static void Configure(IServiceCollection services)
+                    => services.AddHecoleMediator(cfg => cfg.RegisterServicesFromAssemblyContaining<Handled>());
+            }
+            """],
+            extraReferences: [lookalike.ToMetadataReference()],
+            options: new Dictionary<string, ReportDiagnostic> { ["HM1001"] = ReportDiagnostic.Error });
+
+        Assert.Null(compilation.GetTypeByMetadataName("Hecole.Mediator.IRequest"));
+        var diagnostics = await AnalyzeAsync(compilation);
+
+        Assert.Equal("Orphan", Assert.Single(diagnostics.WithId("HM0001")).Text());
+        Assert.Single(diagnostics.WithId("HM1001"));
     }
 
     private static string FindRepositoryRoot()

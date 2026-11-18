@@ -152,8 +152,15 @@ public class BehaviorRegistrationTests
     [Fact]
     public void AddBehavior_InvalidLifetime_Throws()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new HecoleMediatorConfiguration().AddOpenBehavior(typeof(PassBehavior<,>), (ServiceLifetime)42));
+        const ServiceLifetime invalid = (ServiceLifetime)42;
+        var cfg = new HecoleMediatorConfiguration();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => cfg.AddBehavior<ClosedCommandBehavior>(invalid));
+        Assert.Throws<ArgumentOutOfRangeException>(() => cfg.AddBehavior<IPipelineBehavior<TestCommand, TestResult>, ClosedCommandBehavior>(invalid));
+        Assert.Throws<ArgumentOutOfRangeException>(() => cfg.AddBehavior(typeof(ClosedCommandBehavior), invalid));
+        Assert.Throws<ArgumentOutOfRangeException>(() => cfg.AddBehavior(typeof(IPipelineBehavior<TestCommand, TestResult>), typeof(ClosedCommandBehavior), invalid));
+        Assert.Throws<ArgumentOutOfRangeException>(() => cfg.AddOpenBehavior(typeof(PassBehavior<,>), invalid));
+        Assert.Throws<ArgumentOutOfRangeException>(() => cfg.AddOpenBehaviors([typeof(PassBehavior<,>)], invalid));
     }
 
     [Fact]
@@ -185,6 +192,134 @@ public class BehaviorRegistrationTests
         Assert.Equal(
             [typeof(OtherPassBehavior<,>), typeof(PassBehavior<,>), typeof(ClosedCommandBehavior)],
             Behaviors(services).Select(d => d.ImplementationType));
+    }
+
+    // ---- 2.0.1: closed behaviors that could never run -----------------------------------------------------------------
+
+    public static TheoryData<Type, string> NeverRunningClosedBehaviors => new()
+    {
+        { typeof(InterfaceRequestBehavior), "an interface" },
+        { typeof(InterfaceVoidRequestBehavior), "an interface" },
+        { typeof(AbstractRequestBehavior), "an abstract class" },
+        { typeof(NotARequestBehavior), "does not implement" },
+        { typeof(AmbiguousRequestBehavior), "more than one request interface" },
+        { typeof(WidenedResponseBehavior), "declares the response 'Hecole.Mediator.Tests.Fakes.TestResult'" },
+        { typeof(VoidRequestWithResponseBehavior), "declares the response 'Hecole.Mediator.Unit'" },
+    };
+
+    [Theory]
+    [MemberData(nameof(NeverRunningClosedBehaviors))]
+    public void AddBehavior_ClosedBehaviorThatCanNeverRun_ThrowsInEveryOverload(Type behaviorType, string reason)
+    {
+        var serviceType = Assert.Single(behaviorType.GetInterfaces(), i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IPipelineBehavior<,>));
+        var generic = typeof(HecoleMediatorConfiguration).GetMethods()
+            .Single(m => m.Name == nameof(HecoleMediatorConfiguration.AddBehavior) && m.IsGenericMethodDefinition && m.GetGenericArguments().Length == 1)
+            .MakeGenericMethod(behaviorType);
+        var genericPair = typeof(HecoleMediatorConfiguration).GetMethods()
+            .Single(m => m.Name == nameof(HecoleMediatorConfiguration.AddBehavior) && m.IsGenericMethodDefinition && m.GetGenericArguments().Length == 2)
+            .MakeGenericMethod(serviceType, behaviorType);
+
+        Action[] calls =
+        [
+            () => new HecoleMediatorConfiguration().AddBehavior(behaviorType),
+            () => new HecoleMediatorConfiguration().AddBehavior(serviceType, behaviorType),
+            () => Unwrap(() => generic.Invoke(new HecoleMediatorConfiguration(), [ServiceLifetime.Transient])),
+            () => Unwrap(() => genericPair.Invoke(new HecoleMediatorConfiguration(), [ServiceLifetime.Transient])),
+        ];
+
+        foreach (var call in calls)
+        {
+            var ex = Assert.Throws<InvalidOperationException>(call);
+            Assert.Contains(behaviorType.FullName!, ex.Message);
+            Assert.Contains(reason, ex.Message);
+        }
+    }
+
+    [Fact]
+    public void AddBehavior_SeveralClosedInterfaces_OneCanNeverRun_ThrowsAndRegistersNothing()
+    {
+        var cfg = new HecoleMediatorConfiguration();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => cfg.AddBehavior<ValidAndInterfaceBehavior>());
+
+        Assert.Contains(typeof(ValidAndInterfaceBehavior).FullName!, ex.Message);
+        Assert.Empty(cfg.BehaviorsToRegister);
+    }
+
+    [Fact]
+    public void AddBehavior_ClosedBehaviorOfVoidRequestWithUnit_IsAccepted()
+    {
+        var services = new ServiceCollection();
+        services.AddHecoleMediator(cfg => cfg.AddBehavior<VoidCommandBehavior>());
+
+        Assert.Equal(typeof(IPipelineBehavior<VoidCommand, Unit>), Assert.Single(Behaviors(services)).ServiceType);
+    }
+
+    private static void Unwrap(Action call)
+    {
+        try
+        {
+            call();
+        }
+        catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(ex.InnerException);
+        }
+    }
+
+    public interface IContractCommand : IRequest<TestResult>;
+
+    public interface IContractVoidCommand : IRequest;
+
+    public abstract record AbstractCommandBase : IRequest<TestResult>;
+
+    public sealed record NotARequest;
+
+    public sealed class InterfaceRequestBehavior : IPipelineBehavior<IContractCommand, TestResult>
+    {
+        public Task<TestResult> Handle(IContractCommand request, RequestHandlerDelegate<TestResult> next, CancellationToken cancellationToken) => next();
+    }
+
+    public sealed class InterfaceVoidRequestBehavior : IPipelineBehavior<IContractVoidCommand, Unit>
+    {
+        public Task<Unit> Handle(IContractVoidCommand request, RequestHandlerDelegate<Unit> next, CancellationToken cancellationToken) => next();
+    }
+
+    public sealed class AbstractRequestBehavior : IPipelineBehavior<AbstractCommandBase, TestResult>
+    {
+        public Task<TestResult> Handle(AbstractCommandBase request, RequestHandlerDelegate<TestResult> next, CancellationToken cancellationToken) => next();
+    }
+
+    public sealed class NotARequestBehavior : IPipelineBehavior<NotARequest, TestResult>
+    {
+        public Task<TestResult> Handle(NotARequest request, RequestHandlerDelegate<TestResult> next, CancellationToken cancellationToken) => next();
+    }
+
+    public sealed class AmbiguousRequestBehavior : IPipelineBehavior<AmbiguousRequest, TestResult>
+    {
+        public Task<TestResult> Handle(AmbiguousRequest request, RequestHandlerDelegate<TestResult> next, CancellationToken cancellationToken) => next();
+    }
+
+    public sealed class WidenedResponseBehavior : IPipelineBehavior<TestCommand, object>
+    {
+        public Task<object> Handle(TestCommand request, RequestHandlerDelegate<object> next, CancellationToken cancellationToken) => next();
+    }
+
+    public sealed class VoidRequestWithResponseBehavior : IPipelineBehavior<VoidCommand, TestResult>
+    {
+        public Task<TestResult> Handle(VoidCommand request, RequestHandlerDelegate<TestResult> next, CancellationToken cancellationToken) => next();
+    }
+
+    public sealed class ValidAndInterfaceBehavior : IPipelineBehavior<TestCommand, TestResult>, IPipelineBehavior<IContractCommand, TestResult>
+    {
+        public Task<TestResult> Handle(TestCommand request, RequestHandlerDelegate<TestResult> next, CancellationToken cancellationToken) => next();
+
+        public Task<TestResult> Handle(IContractCommand request, RequestHandlerDelegate<TestResult> next, CancellationToken cancellationToken) => next();
+    }
+
+    public sealed class VoidCommandBehavior : IPipelineBehavior<VoidCommand, Unit>
+    {
+        public Task<Unit> Handle(VoidCommand request, RequestHandlerDelegate<Unit> next, CancellationToken cancellationToken) => next();
     }
 
     public sealed class ClosedCommandBehavior : IPipelineBehavior<TestCommand, TestResult>

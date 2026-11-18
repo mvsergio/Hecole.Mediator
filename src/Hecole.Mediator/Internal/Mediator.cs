@@ -5,6 +5,13 @@ namespace Hecole.Mediator.Internal;
 /// <summary>
 /// Default <see cref="IMediator"/>. <c>Send</c> and <c>Publish</c> find the executor of the message's runtime type in
 /// their catalog and run it with the provider this mediator was resolved from.
+/// <para>
+/// Exceptions: only argument errors (a null argument; an object that is not a request or a notification, or a request
+/// type that does not implement exactly one request interface) are thrown synchronously. Anything else thrown while
+/// the call starts (the root-provider guard, no handler, a behavior, handler or publisher that cannot be resolved, a
+/// behavior or handler that throws before returning its task) is returned as a faulted task, with the original
+/// exception. No async state machine is involved on the success path.
+/// </para>
 /// </summary>
 internal sealed class Mediator(IServiceProvider serviceProvider, MediatorRuntime runtime) : IMediator
 {
@@ -14,7 +21,7 @@ internal sealed class Mediator(IServiceProvider serviceProvider, MediatorRuntime
     private readonly bool _resolvedFromRoot = runtime.RequireScope && ReferenceEquals(serviceProvider, runtime.RootProvider);
 
     // Resolved on the first Publish from this mediator's provider, so a Send-only mediator never resolves it;
-    // one publisher instance per mediator.
+    // one publisher instance per mediator, also when the first Publish calls run concurrently.
     private INotificationPublisher? _publisher;
 
     /// <inheritdoc />
@@ -22,11 +29,18 @@ internal sealed class Mediator(IServiceProvider serviceProvider, MediatorRuntime
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var executor = GetExecutor(request.GetType());
-
-        return executor is RequestExecutor<TResponse> typed
-            ? typed.Send(request, _serviceProvider, cancellationToken)
-            : SendCovariant<TResponse>(executor, request, cancellationToken);
+        var executor = _catalog.GetExecutor(request.GetType());
+        try
+        {
+            EnsureNotRoot();
+            return executor is RequestExecutor<TResponse> typed
+                ? typed.Send(request, _serviceProvider, cancellationToken)
+                : SendCovariant<TResponse>(executor, request, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            return Task.FromException<TResponse>(exception);
+        }
     }
 
     /// <inheritdoc />
@@ -35,7 +49,16 @@ internal sealed class Mediator(IServiceProvider serviceProvider, MediatorRuntime
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        return GetExecutor(request.GetType()).SendAsTask(request, _serviceProvider, cancellationToken);
+        var executor = _catalog.GetExecutor(request.GetType());
+        try
+        {
+            EnsureNotRoot();
+            return executor.SendAsTask(request, _serviceProvider, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            return Task.FromException(exception);
+        }
     }
 
     /// <inheritdoc />
@@ -50,15 +73,22 @@ internal sealed class Mediator(IServiceProvider serviceProvider, MediatorRuntime
                 nameof(request));
         }
 
-        return GetExecutor(request.GetType()).SendBoxed(request, _serviceProvider, cancellationToken);
+        var executor = _catalog.GetExecutor(request.GetType());
+        try
+        {
+            EnsureNotRoot();
+            return executor.SendBoxed(request, _serviceProvider, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            return Task.FromException<object?>(exception);
+        }
     }
 
-    private RequestExecutor GetExecutor(Type requestType)
+    private void EnsureNotRoot()
     {
         if (_resolvedFromRoot)
             ThrowResolvedFromRoot();
-
-        return _catalog.GetExecutor(requestType);
     }
 
     private static void ThrowResolvedFromRoot()
@@ -92,7 +122,14 @@ internal sealed class Mediator(IServiceProvider serviceProvider, MediatorRuntime
                 $"The type '{notification.GetType().FullName}' does not implement {nameof(INotification)}.", nameof(notification));
         }
 
-        return PublishCore(_notifications.GetExecutor(notification.GetType()), typed, cancellationToken);
+        try
+        {
+            return PublishCore(_notifications.GetExecutor(notification.GetType()), typed, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            return Task.FromException(exception);
+        }
     }
 
     /// <inheritdoc />
@@ -102,21 +139,35 @@ internal sealed class Mediator(IServiceProvider serviceProvider, MediatorRuntime
         if (notification is null)
             throw new ArgumentNullException(nameof(notification));
 
-        // Dispatch is by runtime type. When the static type is the runtime type (always for a struct),
-        // the executor is the static instance of that type: no lookup.
-        var executor = typeof(TNotification).IsValueType || notification.GetType() == typeof(TNotification)
-            ? NotificationExecutor<TNotification>.Instance
-            : _notifications.GetExecutor(notification.GetType());
+        try
+        {
+            // Dispatch is by runtime type. When the static type is the runtime type (always for a struct),
+            // the executor is the static instance of that type: no lookup.
+            var executor = typeof(TNotification).IsValueType || notification.GetType() == typeof(TNotification)
+                ? NotificationExecutor<TNotification>.Instance
+                : _notifications.GetExecutor(notification.GetType());
 
-        return PublishCore(executor, notification, cancellationToken);
+            return PublishCore(executor, notification, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            return Task.FromException(exception);
+        }
     }
 
     private Task PublishCore(NotificationExecutor executor, INotification notification, CancellationToken cancellationToken)
     {
-        if (_resolvedFromRoot)
-            ThrowResolvedFromRoot();
+        EnsureNotRoot();
 
-        var publisher = _publisher ??= _serviceProvider.GetRequiredService<INotificationPublisher>();
+        var publisher = _publisher ?? ResolvePublisher();
         return executor.Publish(notification, _serviceProvider, publisher, cancellationToken);
+    }
+
+    // Two first Publish calls may each resolve a publisher (a transient one is a new instance per resolution); the
+    // first stored wins and both use it.
+    private INotificationPublisher ResolvePublisher()
+    {
+        var resolved = _serviceProvider.GetRequiredService<INotificationPublisher>();
+        return Interlocked.CompareExchange(ref _publisher, resolved, null) ?? resolved;
     }
 }

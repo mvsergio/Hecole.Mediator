@@ -9,7 +9,7 @@ library needs the changes below. Behavior also changes in a few places (notifica
 | Area | 1.x | 2.0 |
 |---|---|---|
 | Target framework | `net8.0` and `net10.0` | `net10.0` only |
-| Dependencies | `FluentValidation`, `Microsoft.Extensions.DependencyInjection`, `Microsoft.Extensions.Logging.Abstractions` | `Microsoft.Extensions.DependencyInjection.Abstractions`, `Microsoft.Extensions.Logging.Abstractions` |
+| Dependencies | A third-party validation package, `Microsoft.Extensions.DependencyInjection`, `Microsoft.Extensions.Logging.Abstractions` | `Microsoft.Extensions.DependencyInjection.Abstractions`, `Microsoft.Extensions.Logging.Abstractions` |
 | Namespaces | `Hecole.Mediator.Interfaces`, `Hecole.Mediator.Interfaces.Behaviors`, `Hecole.Mediator.Implementation`, `Hecole.Mediator.Implementation.Behaviors`, `Hecole.Mediator.Implementation.Extensions` | `Hecole.Mediator` (contracts), `Hecole.Mediator.Behaviors`, `Hecole.Mediator.NotificationPublishers`, `Microsoft.Extensions.DependencyInjection` (registration) |
 | Mediator interface | `ICoreMediator` | `IMediator`, `ISender` (send only), `IPublisher` (publish only) |
 | Registration | `AddHecoleMediator(params Assembly[])` (scoped; scans the whole `AppDomain` when no assembly is given), `AddCoreMediator(params Assembly[])` (singleton) | `AddHecoleMediator(cfg => ...)` (transient by default; scans only the assemblies given), plus optional `AddRequestHandler` / `AddNotificationHandler` |
@@ -18,7 +18,7 @@ library needs the changes below. Behavior also changes in a few places (notifica
 | `RequestHandlerDelegate<TResponse>` | `()` | `(CancellationToken t = default)`; `next()` still compiles |
 | Requests without response | Not available | `IRequest`, `IRequestHandler<TRequest>`, `Send` returns `Task` |
 | `Send(object)`, `Publish(object)` | Not available | Available |
-| Validation | `ValidationBehavior` over FluentValidation | `ValidationBehavior` over `System.ComponentModel.DataAnnotations`, or your own behavior |
+| Validation | `ValidationBehavior` over a third-party validation package | `ValidationBehavior` over `System.ComponentModel.DataAnnotations`, or your own behavior |
 | Notifications | All handlers in parallel (`Task.WhenAll`) | One at a time, in registration order (`ForeachAwaitPublisher`); `TaskWhenAllPublisher` is opt-in |
 | Built-in behaviors | Run only when the scan found them | Never registered unless added |
 
@@ -26,7 +26,7 @@ library needs the changes below. Behavior also changes in a few places (notifica
 
 ### 1. Target framework and package
 
-Projects must target `net10.0` or later. Remove direct references to `FluentValidation` if they existed only for the
+Projects must target `net10.0` or later. Remove direct references to the validation package 1.x depended on if they existed only for the
 mediator's validation.
 
 ```xml
@@ -141,48 +141,49 @@ services.AddHecoleMediator(cfg => cfg
 
 | Behavior | 1.x | 2.0 |
 |---|---|---|
-| `ValidationBehavior` | FluentValidation `IValidator<TRequest>`; throws `FluentValidation.ValidationException` | DataAnnotations attributes and `IValidatableObject`; throws `RequestValidationException` (derives from `System.ComponentModel.DataAnnotations.ValidationException`) with every error in `Errors` |
+| `ValidationBehavior` | Validators of a third-party validation package; throws that package's exception | DataAnnotations attributes and `IValidatableObject`; throws `RequestValidationException` (derives from `System.ComponentModel.DataAnnotations.ValidationException`) with every error in `Errors` |
 | `LoggingBehavior` | Start and end at Information | Start, end, failure and cancellation, with stable event ids (1001–1004) |
 | `PerformanceBehavior` | Warning above a fixed 500 ms | Warning above `PerformanceBehaviorOptions.Threshold` (500 ms by default), also when the request fails |
 | `UnhandledExceptionBehavior` | Logged the whole request object (`{@Request}`) | Logs the request type name only |
 
-### 7. FluentValidation
+### 7. Validation with another package
 
-There is no FluentValidation integration in 2.0. Two options:
+2.0 has no integration with a third-party validation package. Two options:
 
 | Option | How |
 |---|---|
 | Move to DataAnnotations | Put attributes on the request properties (`[property: Required]` on a positional record) or implement `IValidatableObject`; add `ValidationBehavior<,>` |
-| Keep FluentValidation | Reference `FluentValidation` in your project and write a behavior that runs your validators |
+| Keep the validation package you used with 1.x | Reference it in your own project and write a behavior that runs your validators |
 
-A behavior that keeps FluentValidation:
+A behavior that runs the validators you keep:
 
 ```csharp
-using FluentValidation;
 using Hecole.Mediator;
 
-public sealed class FluentValidationBehavior<TRequest, TResponse>(IEnumerable<IValidator<TRequest>> validators)
+// IRequestValidator<TRequest> stands for the validator abstraction of the package you keep.
+public interface IRequestValidator<in TRequest>
+{
+    Task<IReadOnlyList<string>> ValidateAsync(TRequest request, CancellationToken cancellationToken);
+}
+
+public sealed class ExternalValidationBehavior<TRequest, TResponse>(IEnumerable<IRequestValidator<TRequest>> validators)
     : IPipelineBehavior<TRequest, TResponse>
     where TRequest : notnull
 {
     public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
     {
-        var failures = new List<FluentValidation.Results.ValidationFailure>();
+        var failures = new List<string>();
         foreach (var validator in validators)
-        {
-            var result = await validator.ValidateAsync(request, cancellationToken);
-            failures.AddRange(result.Errors);
-        }
+            failures.AddRange(await validator.ValidateAsync(request, cancellationToken));
 
         if (failures.Count > 0)
-            throw new ValidationException(failures);
+            throw new InvalidOperationException(string.Join("; ", failures)); // or the exception type of your package
 
         return await next();
     }
 }
 
-// services.AddValidatorsFromAssembly(...) (FluentValidation.DependencyInjectionExtensions)
-// services.AddHecoleMediator(cfg => cfg.AddOpenBehavior(typeof(FluentValidationBehavior<,>)));
+// services.AddHecoleMediator(cfg => cfg.AddOpenBehavior(typeof(ExternalValidationBehavior<,>)));
 ```
 
 The validators run one after another, each with its own context (1.x ran them in parallel over a shared context).
@@ -192,7 +193,7 @@ The validators run one after another, each with its own context (1.x ran them in
 | 1.x | 2.0 |
 |---|---|
 | Handlers ran in parallel (`Task.WhenAll`) | Handlers run one at a time, in registration order; the first exception stops the rest |
-| Two registrations of the same handler class ran twice | The same handler class runs once |
+| Two registrations of the same handler class ran twice | The library registers a handler once, however many times it is scanned or added; since 2.0.1 every handler the container returns runs, so a class registered twice directly in the container runs twice and `VerifyHecoleMediator` reports it |
 
 To keep parallel execution:
 
@@ -224,5 +225,5 @@ Changes that compile without errors but behave differently:
 | `net8.0` target | Removed. Stay on 1.3.0 for .NET 8 |
 | `AddCoreMediator` | Removed. Use `AddHecoleMediator(cfg => ...)` |
 | `ICoreMediator`, public `CoreMediator` class | Removed. Use `IMediator`, `ISender`, `IPublisher` |
-| FluentValidation in `ValidationBehavior` | Removed. DataAnnotations, or your own behavior (step 7) |
+| Third-party validators in `ValidationBehavior` | Removed. DataAnnotations, or your own behavior (step 7) |
 | Scanning every loaded assembly | Removed on purpose. Name the assemblies |

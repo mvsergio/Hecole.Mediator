@@ -275,6 +275,67 @@ public class ScanTests
         Assert.Throws<ArgumentNullException>(() => cfg.RegisterServicesFromAssemblyContaining(null!));
     }
 
+    [Fact]
+    public async Task Scan_FailingMidway_LeavesCollectionAndCatalogUntouched_AndTheAssemblyCanBeScannedAgain()
+    {
+        var commandHandler = Target.GetType("Hecole.Mediator.Tests.ScanTarget.ScanCommandHandler", throwOnError: true)!;
+        // Valid handlers first, then a second handler for ScanQuery: before 2.0.1 the first ones stayed registered.
+        var assembly = new ListedTypesAssembly(commandHandler, typeof(ScanNoteHandler), typeof(ScanQueryHandler), typeof(ConflictingScanQueryHandler));
+        var services = new ServiceCollection();
+        services.AddSingleton<ScanRecorder>();
+        services.AddHecoleMediator(_ => { });
+        var before = services.ToList();
+        var registry = HandlerRegistry.GetOrAdd(services);
+
+        Assert.Throws<InvalidOperationException>(() => services.AddHecoleMediator(cfg => cfg.RegisterServicesFromAssembly(assembly)));
+
+        Assert.Equal(before, services);
+        Assert.Empty(registry.Registrations);
+        Assert.Empty(registry.NotificationRegistrations);
+        Assert.Empty(registry.NotificationExecutors);
+
+        // Cause removed: the same assembly is scanned again, completely.
+        assembly.Types.Remove(typeof(ConflictingScanQueryHandler));
+        services.AddHecoleMediator(cfg => cfg.RegisterServicesFromAssembly(assembly));
+
+        Assert.Equal([typeof(ScanCommand), typeof(ScanQuery)], registry.Registrations.Select(r => r.RequestType));
+        Assert.Single(services, d => d.ServiceType == typeof(IRequestHandler<ScanQuery, string>));
+        Assert.Single(services, d => d.ServiceType == typeof(INotificationHandler<ScanNote>));
+
+        using var root = services.BuildServiceProvider();
+        using var scope = root.CreateScope();
+        var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+        Assert.Equal("scan:4", await mediator.Send(new ScanQuery(4)));
+        await mediator.Send(new ScanCommand("c"));
+        await mediator.Publish(new ScanNote("n"));
+        Assert.Equal(["command:c", "note:n"], root.GetRequiredService<ScanRecorder>().Entries);
+        Assert.Equal(2, root.GetRequiredService<MediatorRuntime>().Catalog.Count);
+    }
+
+    [Fact]
+    public void Scan_InvalidRequestTypeAfterValidHandlers_RegistersNothing()
+    {
+        // The lot of ArgumentException validations (here: a handler of an abstract request) is all or nothing too.
+        var invalid = EmittedHandlerAssembly.WithHandler(typeof(IRequestHandler<AbstractScanQuery, string>)).GetTypes().Single();
+        var assembly = new ListedTypesAssembly(typeof(ScanQueryHandler), invalid);
+        var services = new ServiceCollection();
+        services.AddHecoleMediator(_ => { });
+        var before = services.ToList();
+
+        Assert.Throws<ArgumentException>(() => services.AddHecoleMediator(cfg => cfg.RegisterServicesFromAssembly(assembly)));
+
+        Assert.Equal(before, services);
+        Assert.Empty(HandlerRegistry.GetOrAdd(services).Registrations);
+    }
+
+    /// <summary>An assembly whose types are a list the test can change.</summary>
+    private sealed class ListedTypesAssembly(params Type[] types) : Assembly
+    {
+        public List<Type> Types { get; } = [.. types];
+
+        public override Type[] GetTypes() => [.. Types];
+    }
+
     /// <summary>An assembly whose <c>GetTypes</c> fails for one type, as when a dependency is missing.</summary>
     private sealed class PartiallyLoadableAssembly : Assembly
     {

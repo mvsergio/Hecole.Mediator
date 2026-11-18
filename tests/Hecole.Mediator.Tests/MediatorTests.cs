@@ -102,6 +102,75 @@ public class MediatorTests
         await Assert.ThrowsAsync<ArgumentException>(() => host.Mediator.Send((object)new AmbiguousRequest()));
     }
 
+    public readonly record struct StructQuery(int Value) : IRequest<int>;
+
+    public sealed class StructQueryHandler : IRequestHandler<StructQuery, int>
+    {
+        public Task<int> Handle(StructQuery request, CancellationToken cancellationToken) => Task.FromResult(request.Value * 2);
+    }
+
+    public sealed record TwoResponsesRequest : IRequest<string>, IRequest<int>;
+
+    public sealed class TwoResponsesHandler : IRequestHandler<TwoResponsesRequest, string>
+    {
+        public Task<string> Handle(TwoResponsesRequest request, CancellationToken cancellationToken) => Task.FromResult("never");
+    }
+
+    [Fact]
+    public async Task Send_StructRequest_WorksInEveryForm_RegisteredOrOnlyInContainer()
+    {
+        using var registered = TestHost.Build(s => s.AddRequestHandler<StructQuery, int, StructQueryHandler>());
+        using var containerOnly = TestHost.Build(s => s.AddTransient<IRequestHandler<StructQuery, int>, StructQueryHandler>());
+
+        foreach (var host in new[] { registered, containerOnly })
+        {
+            Assert.Equal(10, await host.Mediator.Send(new StructQuery(5)));
+            Assert.Equal(12, Assert.IsType<int>(await host.Mediator.Send((object)new StructQuery(6))));
+        }
+    }
+
+    // A request implementing two IRequest<T> has no single response type: refused at registration, and an argument error
+    // (synchronous ArgumentException) when sent with only a container registration.
+    [Fact]
+    public void Send_RequestWithTwoResponseInterfaces_IsRefused()
+    {
+        var services = new ServiceCollection();
+        Assert.Throws<ArgumentException>(() => services.AddRequestHandler<TwoResponsesRequest, string, TwoResponsesHandler>());
+
+        using var host = TestHost.Build(s => s.AddTransient<IRequestHandler<TwoResponsesRequest, string>, TwoResponsesHandler>());
+        var boxed = Assert.Throws<ArgumentException>(() => { _ = host.Mediator.Send((object)new TwoResponsesRequest()); });
+        Assert.Throws<ArgumentException>(() => { _ = host.Mediator.Send<string>(new TwoResponsesRequest()); });
+
+        Assert.Contains("more than one request interface", boxed.Message, StringComparison.Ordinal);
+    }
+
+    // The mediator holds the provider of its scope: once the scope is disposed, Send and Publish fail with
+    // ObjectDisposedException, in the returned task.
+    [Fact]
+    public async Task MediatorUsedAfterItsScopeWasDisposed_FailsThroughTheTaskWithObjectDisposedException()
+    {
+        var services = new ServiceCollection();
+        services.AddHecoleMediator(_ => { });
+        services.AddRequestHandler<TestCommand, TestResult, TestCommandHandler>();
+        services.AddNotificationHandler<TestNotification, TestNotificationHandler>();
+        using var root = services.BuildServiceProvider();
+
+        IMediator mediator;
+        using (var scope = root.CreateScope())
+        {
+            mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+            await mediator.Send(new TestCommand("inside"));
+        }
+
+        var send = mediator.Send(new TestCommand("after"));
+        var publish = mediator.Publish(new TestNotification("after"));
+
+        Assert.True(send.IsFaulted);
+        Assert.True(publish.IsFaulted);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => send);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => publish);
+    }
+
     [Fact]
     public async Task Send_CancellationTokenIsPropagatedToHandler()
     {

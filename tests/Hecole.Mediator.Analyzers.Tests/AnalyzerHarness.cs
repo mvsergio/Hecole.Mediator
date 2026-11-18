@@ -31,6 +31,7 @@ internal static class AnalyzerHarness
         new RequestHandlerAnalyzer(),
         new ExplicitRegistrationAnalyzer(),
         new RestrictedUsageAnalyzer(),
+        new HandlerReferenceAnalyzer(),
     ];
 
     /// <summary>Compiles <paramref name="sources"/> as one assembly; fails the test on any compiler error.</summary>
@@ -39,7 +40,8 @@ internal static class AnalyzerHarness
         IEnumerable<string> sources,
         bool referenceMediator = true,
         IEnumerable<MetadataReference>? extraReferences = null,
-        IReadOnlyDictionary<string, ReportDiagnostic>? options = null)
+        IReadOnlyDictionary<string, ReportDiagnostic>? options = null,
+        SyntaxTreeOptionsProvider? treeOptions = null)
     {
         var trees = sources
             .Select(source => CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest)))
@@ -59,6 +61,11 @@ internal static class AnalyzerHarness
         if (options is not null)
         {
             compilationOptions = compilationOptions.WithSpecificDiagnosticOptions(options);
+        }
+
+        if (treeOptions is not null)
+        {
+            compilationOptions = compilationOptions.WithSyntaxTreeOptionsProvider(treeOptions);
         }
 
         var compilation = CSharpCompilation.Create(assemblyName, trees, references, compilationOptions);
@@ -124,5 +131,26 @@ internal static class AnalyzerHarness
                                    || name is "mscorlib.dll" or "netstandard.dll"))
                 .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path)),
         ];
+    }
+}
+
+/// <summary>
+/// Per-file severity, as an .editorconfig in a folder sets it: <paramref name="id"/> is an error in the trees
+/// <paramref name="enabled"/> selects and has no value elsewhere.
+/// </summary>
+internal sealed class PerTreeOptions(string id, Func<SyntaxTree, bool> enabled) : SyntaxTreeOptionsProvider
+{
+    public override GeneratedKind IsGenerated(SyntaxTree tree, CancellationToken cancellationToken) => GeneratedKind.Unknown;
+
+    public override bool TryGetDiagnosticValue(SyntaxTree tree, string diagnosticId, CancellationToken cancellationToken, out ReportDiagnostic severity)
+    {
+        severity = ReportDiagnostic.Error;
+        return diagnosticId == id && enabled(tree);
+    }
+
+    public override bool TryGetGlobalDiagnosticValue(string diagnosticId, CancellationToken cancellationToken, out ReportDiagnostic severity)
+    {
+        severity = ReportDiagnostic.Default;
+        return false;
     }
 }
