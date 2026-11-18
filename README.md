@@ -1,6 +1,6 @@
 # Hecole.Mediator
 
-[Português](README.pt-BR.md)
+[Português](https://github.com/mvsergio/Hecole.Mediator/blob/master/README.pt-BR.md)
 
 In-process mediator for .NET 10 and later. A request goes to exactly one handler, a notification goes to any number of
 handlers, and pipeline behaviors wrap every request. The public contracts are `IRequest`, `IRequestHandler`, `ISender`,
@@ -388,7 +388,7 @@ dotnet_diagnostic.HM1001.severity = error
 The analyzer is an early warning, not an enforcement mechanism: reflection by string, a nested `.editorconfig`,
 `#pragma` or `[SuppressMessage]`, and code that is never called are out of its reach.
 
-Details, heuristics and known false positives: [docs/analyzers.md](docs/analyzers.md).
+Details, heuristics and known false positives: [docs/analyzers.md](https://github.com/mvsergio/Hecole.Mediator/blob/master/docs/analyzers.md).
 
 ## Behavior notes
 
@@ -421,7 +421,7 @@ These may be added later without breaking the existing API.
 
 ## Upgrading from 1.x
 
-See [docs/migration-1.x-to-2.0.md](docs/migration-1.x-to-2.0.md).
+See [docs/migration-1.x-to-2.0.md](https://github.com/mvsergio/Hecole.Mediator/blob/master/docs/migration-1.x-to-2.0.md).
 
 ## Requirements
 
@@ -435,11 +435,11 @@ See [docs/migration-1.x-to-2.0.md](docs/migration-1.x-to-2.0.md).
 
 | Document | Content |
 |---|---|
-| [docs/analyzers.md](docs/analyzers.md) | Analyzer rules and configuration |
-| [docs/benchmarks.md](docs/benchmarks.md) | Measured cost of `Send` and `Publish`, 1.3.0 against 2.0, and the limits of that measurement |
-| [docs/migration-1.x-to-2.0.md](docs/migration-1.x-to-2.0.md) | Upgrading from 1.x |
-| [CHANGELOG.md](CHANGELOG.md) | Changes per version (in Portuguese) |
+| [docs/analyzers.md](https://github.com/mvsergio/Hecole.Mediator/blob/master/docs/analyzers.md) | Analyzer rules and configuration |
+| [docs/benchmarks.md](https://github.com/mvsergio/Hecole.Mediator/blob/master/docs/benchmarks.md) | Measured cost of `Send` and `Publish`, 1.3.0 against 2.0, and the limits of that measurement |
+| [docs/migration-1.x-to-2.0.md](https://github.com/mvsergio/Hecole.Mediator/blob/master/docs/migration-1.x-to-2.0.md) | Upgrading from 1.x |
+| [CHANGELOG.md](https://github.com/mvsergio/Hecole.Mediator/blob/master/CHANGELOG.md) | Changes per version (in Portuguese) |
 
 ## License
 
-MIT. See [LICENSE.txt](LICENSE.txt).
+MIT. See [LICENSE.txt](https://github.com/mvsergio/Hecole.Mediator/blob/master/LICENSE.txt).
